@@ -60,7 +60,7 @@ elif os.path.exists(default_video_path):
     final_video_path = default_video_path
 
 if final_video_path:
-    cap = cv2.VideoCapture(final_video_path)
+    cap = cv2.VideoCapture(final_video_path, cv2.CAP_FFMPEG)
     
     col1, col2 = st.columns([3, 1])
     with col1:
