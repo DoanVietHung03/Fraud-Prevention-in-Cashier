@@ -53,6 +53,14 @@ class FraudDetector:
         self.close_confirm_counter = 0 
         self.CLOSE_THRESHOLD = 30
 
+        # --- CẤU HÌNH MOTION DETECTION ---
+        # history=500: Học nền trong 500 frame
+        # varThreshold=50: Độ nhạy (cao hơn thì ít nhiễu hơn)
+        self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
+            history=500, varThreshold=50, detectShadows=False
+        )
+        self.MOTION_THRESHOLD = 0.05 # 5% diện tích vùng ROI thay đổi là có chuyển động
+
     def is_inside_roi(self, x, y, roi):
         x1, y1, x2, y2 = roi
         return x1 <= x <= x2 and y1 <= y <= y2
@@ -65,6 +73,18 @@ class FraudDetector:
         roi = frame[y1:y2, x1:x2]
         if roi.size == 0: return "CLOSED"
 
+        # --- BƯỚC 1: TÍNH TOÁN MOTION (CHUYỂN ĐỘNG) ---
+        # Tạo mặt nạ chuyển động (Trắng = Động, Đen = Tĩnh)
+        fg_mask = self.bg_subtractor.apply(roi)
+        
+        # Đếm số pixel trắng (pixel chuyển động)
+        motion_pixels = np.count_nonzero(fg_mask)
+        total_pixels = roi.shape[0] * roi.shape[1]
+        motion_ratio = motion_pixels / total_pixels
+        
+        is_moving = motion_ratio > self.MOTION_THRESHOLD
+
+        # --- BƯỚC 2: AI CLASSIFICATION ---
         target_h, target_w = self.input_shape[1], self.input_shape[2]
         img = cv2.resize(roi, (target_w, target_h))
         input_data = (np.float32(img) / 127.5) - 1.0
@@ -74,13 +94,26 @@ class FraudDetector:
         self.interpreter.invoke()
         output_data = self.interpreter.get_tensor(self.output_details[0]['index'])
         
-        # LƯU Ý: Kiểm tra file labels.txt. 
-        # Index 0 = OPEN, Index 1 = CLOSED
-        open_score = output_data[0][0]
-        closed_score = output_data[0][1]
+        # Index 0 = OPEN, Index 1 = CLOSED (Check lại labels.txt của bạn nếu ngược)
+        ai_says_open = output_data[0][0] > output_data[0][1]
+
+        # --- BƯỚC 3: HYBRID LOGIC ---
+        final_decision = False
         
-        is_open = open_score > closed_score
-        self.drawer_buffer.append(is_open)
+        if self.last_drawer_status == "CLOSED":
+            # Nếu đang ĐÓNG -> Muốn mở thì AI phải bảo Mở VÀ phải có Chuyển Động
+            # Điều này lọc sạch các trường hợp ánh sáng thay đổi làm AI nhầm
+            if ai_says_open and is_moving:
+                final_decision = True
+            else:
+                final_decision = False # Giữ nguyên đóng dù AI có thể bảo mở (nhưng ko có động)
+        else:
+            # Nếu đang MỞ -> Chỉ cần AI bảo mở là được (vì lúc này két đứng yên)
+            # Tuy nhiên, nếu AI bảo đóng -> chấp nhận đóng ngay
+            final_decision = ai_says_open
+
+        # Vẫn dùng buffer để làm mượt kết quả cuối cùng
+        self.drawer_buffer.append(final_decision)
         
         if sum(self.drawer_buffer) >= (self.drawer_buffer.maxlen * 0.8):
             return "OPEN"
@@ -177,10 +210,10 @@ class FraudDetector:
         self.frame_count += 1
         
         # 1. Kiểm tra: Nếu vừa bấm POS trong vòng 5 giây, thì check két LIÊN TỤC (skip=1)
-        # Nếu đang rảnh (IDLE), thì check thưa ra (skip=5) để đỡ nóng máy
+        # Nếu đang rảnh (IDLE), thì check thưa ra (skip=2) để đỡ nóng máy
         is_urgent = (time.time() - self.last_pos_time < 5.0) and (self.state == "POS_INTERACTED")
 
-        if is_urgent or (self.frame_count % 5 == 0):
+        if is_urgent or (self.frame_count % 2 == 0):
             drawer_status = self.classify_drawer(frame)
             self.last_drawer_status = drawer_status
         else:
@@ -207,7 +240,6 @@ class FraudDetector:
                 if any(self.is_inside_roi(pt.x * w, pt.y * h, self.drawer_roi) for pt in important_points):
                     hand_in_drawer = True
                     
-                # Tối ưu: Nếu đã tìm thấy tay ở cả 2 nơi (hoặc 1 nơi tùy logic), có thể break để tiết kiệm CPU
                 if hand_in_pos or hand_in_drawer:
                     break
         
