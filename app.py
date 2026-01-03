@@ -3,9 +3,59 @@ import cv2
 import numpy as np
 import time
 import os
+import threading
+from collections import deque
+from datetime import datetime
 
 from modules.detect_hand import FraudDetector
 
+# --- EVIDENCES RECORDING ---
+class EvidenceRecorder:
+    def __init__(self, output_folder="evidence_clips", fps=30, buffer_seconds=10):
+        self.output_folder = output_folder
+        self.fps = fps
+        # Ring Buffer: Giữ video quá khứ
+        self.ring_buffer = deque(maxlen=int(fps * buffer_seconds))
+        self.is_recording = False
+        self.frames_to_record = 0
+        self.temp_evidence = []
+        
+        if not os.path.exists(output_folder): os.makedirs(output_folder)
+
+    def add_frame(self, frame):
+        self.ring_buffer.append(frame) # Luôn lưu vào bộ nhớ tạm
+        if self.is_recording:
+            self.temp_evidence.append(frame)
+            self.frames_to_record -= 1
+            if self.frames_to_record <= 0: self.stop_and_save()
+
+    def trigger_alarm(self):
+        if not self.is_recording: # Chỉ kích hoạt nếu chưa đang ghi
+            self.is_recording = True
+            # Ghi thêm 10 giây tương lai (hoặc tùy chỉnh)
+            self.frames_to_record = int(self.fps * 10) 
+            # Lấy ngay dữ liệu quá khứ đắp vào đầu video
+            self.temp_evidence = list(self.ring_buffer)
+            return True
+        return False
+
+    def stop_and_save(self):
+        self.is_recording = False
+        # Chạy thread ngầm để lưu file không làm đơ app
+        threading.Thread(target=self._save, args=(self.temp_evidence.copy(),)).start()
+        self.temp_evidence = []
+
+    def _save(self, frames):
+        if not frames: return
+        filename = f"{self.output_folder}/evidence_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        h, w, _ = frames[0].shape
+        out = cv2.VideoWriter(filename, cv2.VideoWriter_fourcc(*'mp4v'), self.fps, (w, h))
+        for f in frames: out.write(cv2.cvtColor(f, cv2.COLOR_RGB2BGR)) # Convert lại BGR để lưu
+        out.release()
+        print(f"✅ Đã lưu: {filename}")
+
+
+# --- SETUP STREAMLIT ---
 st.set_page_config(page_title="Smart Retail Monitor", layout="wide")
 st.title("🛡️ AI Fraud Detection: Sequential Logic (FSM + Classification)")
 
@@ -61,6 +111,9 @@ elif os.path.exists(default_video_path):
 
 if final_video_path:
     cap = cv2.VideoCapture(final_video_path, cv2.CAP_FFMPEG)
+
+    fps = cap.get(cv2.CAP_PROP_FPS) if cap.get(cv2.CAP_PROP_FPS) > 0 else 30
+    recorder = EvidenceRecorder(fps=fps, buffer_seconds=10)
     
     col1, col2 = st.columns([3, 1])
     with col1:
@@ -71,7 +124,6 @@ if final_video_path:
         st_state_info = st.empty()
     
     logs = []
-    fps = cap.get(cv2.CAP_PROP_FPS)
     frame_count = 0
 
     while cap.isOpened():
@@ -85,6 +137,17 @@ if final_video_path:
         # --- GỌI XỬ LÝ LOGIC ---
         # Hàm trả về detection_result (tay), event (sự kiện logic), drawer_status (trạng thái két)
         detection_result, event, drawer_status = detector.process_frame(frame_rgb, frame_timestamp_ms)
+
+        recorder.add_frame(frame_rgb) # Nạp frame vào bộ nhớ
+
+        if event and ("ALARM" in event or "SUSPICIOUS" in event):
+            if recorder.trigger_alarm():
+                st.toast("🎥 Đang lưu video bằng chứng!", icon="🚨") # Thông báo nhẹ
+                
+        # Hiển thị icon REC lên màn hình nếu đang ghi
+        if recorder.is_recording:
+            cv2.circle(frame_rgb, (30, 30), 10, (255, 0, 0), -1)
+            cv2.putText(frame_rgb, "REC", (50, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
         
         # --- VẼ GIAO DIỆN (VISUALIZATION) ---
         
