@@ -192,21 +192,24 @@ class FraudDetector:
         
         hand_in_pos = False
         hand_in_drawer = False
-        
+        h, w, _ = frame.shape
+
         if detection_result.hand_landmarks:
             for landmarks in detection_result.hand_landmarks:
-                wrist = landmarks[0]
-                index_finger = landmarks[8]
-                h, w, _ = frame.shape
-                cx, cy = int(((wrist.x + index_finger.x) / 2) * w), int(((wrist.y + index_finger.y) / 2) * h)
-                
+                # Danh sách các điểm quan trọng: Cổ tay, Ngón cái, Ngón trỏ, Ngón giữa
+                important_points = [landmarks[0], landmarks[4], landmarks[8], landmarks[12]]
+    
                 # Check vùng POS
-                if self.is_inside_roi(cx, cy, self.pos_roi):
+                if any(self.is_inside_roi(pt.x * w, pt.y * h, self.pos_roi) for pt in important_points):
                     hand_in_pos = True
-                
-                # Check vùng Drawer (Chỉ có ý nghĩa khi logic cần, nhưng cứ detect trước)
-                if self.is_inside_roi(cx, cy, self.drawer_roi):
+            
+                # Check vùng Drawer
+                if any(self.is_inside_roi(pt.x * w, pt.y * h, self.drawer_roi) for pt in important_points):
                     hand_in_drawer = True
+                    
+                # Tối ưu: Nếu đã tìm thấy tay ở cả 2 nơi (hoặc 1 nơi tùy logic), có thể break để tiết kiệm CPU
+                if hand_in_pos or hand_in_drawer:
+                    break
         
         # 3. Máy Trạng Thái (Logic)
         event = self.update_fsm(drawer_status, hand_in_pos, hand_in_drawer)

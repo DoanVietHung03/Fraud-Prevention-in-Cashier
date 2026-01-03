@@ -21,7 +21,7 @@ st.sidebar.info("💡 Kéo thanh trượt sao cho khung khớp vị trí thực 
 st.sidebar.subheader("Vùng POS (Cảm ứng)")
 pos_x1 = st.sidebar.slider("POS X1", 0, 1280, 427, key="p_x1")
 pos_y1 = st.sidebar.slider("POS Y1", 0, 720, 185, key="p_y1")
-pos_x2 = st.sidebar.slider("POS X2", 0, 1280, 660, key="p_x2")
+pos_x2 = st.sidebar.slider("POS X2", 0, 1280, 680, key="p_x2")
 pos_y2 = st.sidebar.slider("POS Y2", 0, 720, 406, key="p_y2")
 pos_roi = [pos_x1, pos_y1, pos_x2, pos_y2]
 
@@ -106,13 +106,13 @@ if final_video_path:
         cv2.putText(frame_rgb, status_lbl, (drawer_roi[0], drawer_roi[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
 
         # 3. Vẽ Tay (Đơn giản hóa: Chỉ vẽ các điểm đầu ngón tay nếu có)
-        if detection_result.hand_landmarks:
-            for landmarks in detection_result.hand_landmarks:
-                wrist = landmarks[0]
-                index_finger = landmarks[8]
-                h, w, _ = frame.shape
-                cx, cy = int(((wrist.x + index_finger.x) / 2) * w), int(((wrist.y + index_finger.y) / 2) * h)
-                cv2.circle(frame_rgb, (cx, cy), 5, (255, 255, 0), -1) # Màu vàng
+        # if detection_result.hand_landmarks:
+        #     for landmarks in detection_result.hand_landmarks:
+        #         wrist = landmarks[0]
+        #         index_finger = landmarks[8]
+        #         h, w, _ = frame.shape
+        #         cx, cy = int(((wrist.x + index_finger.x) / 2) * w), int(((wrist.y + index_finger.y) / 2) * h)
+        #         cv2.circle(frame_rgb, (cx, cy), 5, (255, 255, 0), -1) # Màu vàng
 
         # 4. Hiển thị Thông tin Trạng thái (Góc trên trái)
         # State hiện tại
@@ -141,8 +141,8 @@ if final_video_path:
             logs.append(log_entry)
             
             # Cập nhật khung log bên phải
-            log_text = "\n".join(logs[::-1]) # Mới nhất lên đầu
-            st_log.markdown(f"```\n{log_text}\n```")
+            log_text = "  \n".join(logs[::-1]) # Mới nhất lên đầu
+            st_log.markdown(log_text)
             
             # Cập nhật bảng thông tin nhanh
             st_state_info.info(f"Last Event: {event}")
