@@ -11,7 +11,7 @@ from modules.detect_hand import FraudDetector
 
 # --- EVIDENCES RECORDING ---
 class EvidenceRecorder:
-    def __init__(self, output_folder="evidence_clips", fps=30, buffer_seconds=10):
+    def __init__(self, output_folder="evidence_clips", fps=30, buffer_seconds=30):
         self.output_folder = output_folder
         self.fps = fps
         # Ring Buffer: Giữ video quá khứ
@@ -19,6 +19,7 @@ class EvidenceRecorder:
         self.is_recording = False
         self.frames_to_record = 0
         self.temp_evidence = []
+        self.event_type = "UNKNOWN" # Lưu loại sự kiện
         
         if not os.path.exists(output_folder): os.makedirs(output_folder)
 
@@ -29,30 +30,43 @@ class EvidenceRecorder:
             self.frames_to_record -= 1
             if self.frames_to_record <= 0: self.stop_and_save()
 
-    def trigger_alarm(self):
-        if not self.is_recording: # Chỉ kích hoạt nếu chưa đang ghi
-            self.is_recording = True
-            # Ghi thêm 10 giây tương lai (hoặc tùy chỉnh)
-            self.frames_to_record = int(self.fps * 10) 
-            # Lấy ngay dữ liệu quá khứ đắp vào đầu video
-            self.temp_evidence = list(self.ring_buffer)
-            return True
-        return False
+    def trigger_save(self, event_type="ALARM", duration_future=30):
+        """
+        event_type: "ALARM" hoặc "WARNING"
+        duration_future: Số giây muốn ghi thêm vào tương lai (mặc định 30s)
+        """
+        # Nếu đang ghi WARNING mà chuyển sang ALARM -> Cập nhật nhãn thành ALARM (ưu tiên cao hơn)
+        if self.is_recording:
+            if event_type == "ALARM" and self.event_type == "WARNING":
+                self.event_type = "ALARM"
+                # Gia hạn thêm thời gian ghi nếu cần
+                self.frames_to_record = max(self.frames_to_record, int(self.fps * duration_future))
+            return False # Đang ghi rồi thì không kích hoạt mới
 
-    def stop_and_save(self):
-        self.is_recording = False
-        # Chạy thread ngầm để lưu file không làm đơ app
-        threading.Thread(target=self._save, args=(self.temp_evidence.copy(),)).start()
-        self.temp_evidence = []
+        # Nếu chưa ghi thì bắt đầu ghi
+        self.is_recording = True
+        self.event_type = event_type
+        self.frames_to_record = int(self.fps * duration_future)
+        self.temp_evidence = list(self.ring_buffer) # Lấy 30s quá khứ đắp vào
+        return True
 
-    def _save(self, frames):
+    def _save(self, frames, event_label):
         if not frames: return
-        filename = f"{self.output_folder}/evidence_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        # Tên file sẽ có dạng: evidence_ALARM_2024... hoặc evidence_WARNING_2024...
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"{self.output_folder}/evidence_{event_label}_{timestamp}.mp4"
+
         h, w, _ = frames[0].shape
         out = cv2.VideoWriter(filename, cv2.VideoWriter_fourcc(*'mp4v'), self.fps, (w, h))
         for f in frames: out.write(cv2.cvtColor(f, cv2.COLOR_RGB2BGR)) # Convert lại BGR để lưu
         out.release()
         print(f"✅ Đã lưu: {filename}")
+    
+    def stop_and_save(self):
+        self.is_recording = False
+        # Truyền event_type hiện tại vào thread save
+        threading.Thread(target=self._save, args=(self.temp_evidence.copy(), self.event_type)).start()
+        self.temp_evidence = []
 
 
 # --- SETUP STREAMLIT ---
@@ -113,7 +127,7 @@ if final_video_path:
     cap = cv2.VideoCapture(final_video_path, cv2.CAP_FFMPEG)
 
     fps = cap.get(cv2.CAP_PROP_FPS) if cap.get(cv2.CAP_PROP_FPS) > 0 else 30
-    recorder = EvidenceRecorder(fps=fps, buffer_seconds=10)
+    recorder = EvidenceRecorder(fps=fps, buffer_seconds=30)
     
     col1, col2 = st.columns([3, 1])
     with col1:
@@ -140,14 +154,26 @@ if final_video_path:
 
         recorder.add_frame(frame_rgb) # Nạp frame vào bộ nhớ
 
-        if event and ("ALARM" in event or "SUSPICIOUS" in event):
-            if recorder.trigger_alarm():
-                st.toast("🎥 Đang lưu video bằng chứng!", icon="🚨") # Thông báo nhẹ
-                
-        # Hiển thị icon REC lên màn hình nếu đang ghi
+        if event:
+            # 1. Trường hợp BÁO ĐỘNG ĐỎ (Trộm / Ghost Refund)
+            if "ALARM" in event:
+                # Ghi ngay, gán nhãn ALARM, ghi thêm 30s tương lai
+                if recorder.trigger_save(event_type="ALARM", duration_future=30):
+                    st.toast("🚨 PHÁT HIỆN VI PHẠM! Đang lưu bằng chứng...", icon="🔥")
+            
+            # 2. Trường hợp CẢNH BÁO VÀNG (Mở két trước - Chờ Refund)
+            elif "WARNING" in event:
+                # Ghi ngay, gán nhãn WARNING, ghi thêm 30s tương lai (để chờ xem có nhập POS không)
+                if recorder.trigger_save(event_type="WARNING", duration_future=30):
+                    st.toast("⚠️ Cảnh báo quy trình! Đang lưu clip đối soát.", icon="📹")
+
+        # --- HIỂN THỊ TRẠNG THÁI GHI ---
         if recorder.is_recording:
-            cv2.circle(frame_rgb, (30, 30), 10, (255, 0, 0), -1)
-            cv2.putText(frame_rgb, "REC", (50, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+            # Đổi màu icon REC dựa theo loại sự kiện
+            rec_color = (255, 0, 0) if recorder.event_type == "ALARM" else (0, 165, 255) # Đỏ hoặc Cam
+            cv2.circle(frame_rgb, (30, 30), 10, rec_color, -1)
+            cv2.putText(frame_rgb, f"REC [{recorder.event_type}]", (50, 35), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, rec_color, 2)
         
         # --- VẼ GIAO DIỆN (VISUALIZATION) ---
         
