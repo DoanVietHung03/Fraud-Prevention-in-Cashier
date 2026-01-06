@@ -89,17 +89,17 @@ st.sidebar.header("2. Cấu hình Vùng (ROI)")
 st.sidebar.info("💡 Kéo thanh trượt sao cho khung khớp vị trí thực tế.")
 
 # 1. Cấu hình POS (Green)
-pos_x1 = st.sidebar.slider("POS X1", 0, 1280, 427, key="p_x1")
-pos_y1 = st.sidebar.slider("POS Y1", 0, 720, 185, key="p_y1")
-pos_x2 = st.sidebar.slider("POS X2", 0, 1280, 680, key="p_x2")
-pos_y2 = st.sidebar.slider("POS Y2", 0, 720, 406, key="p_y2")
+pos_x1 = st.sidebar.slider("POS X1", 0, 1280, 640, key="p_x1")
+pos_y1 = st.sidebar.slider("POS Y1", 0, 720, 284, key="p_y1")
+pos_x2 = st.sidebar.slider("POS X2", 0, 1280, 754, key="p_x2")
+pos_y2 = st.sidebar.slider("POS Y2", 0, 720, 500, key="p_y2")
 pos_roi = [pos_x1, pos_y1, pos_x2, pos_y2]
 
 # 2. Cấu hình Két Tiền (Red/Dynamic)
-drawer_x1 = st.sidebar.slider("Drawer X1", 0, 1280, 650, key="d_x1")
-drawer_y1 = st.sidebar.slider("Drawer Y1", 0, 720, 98, key="d_y1")
-drawer_x2 = st.sidebar.slider("Drawer X2", 0, 1280, 830, key="d_x2")
-drawer_y2 = st.sidebar.slider("Drawer Y2", 0, 720, 260, key="d_y2")
+drawer_x1 = st.sidebar.slider("DRAWER X1", 0, 1280, 320, key="d_x1")
+drawer_y1 = st.sidebar.slider("DRAWER Y1", 0, 720, 516, key="d_y1")
+drawer_x2 = st.sidebar.slider("DRAWER X2", 0, 1280, 548, key="d_x2")
+drawer_y2 = st.sidebar.slider("DRAWER Y2", 0, 720, 628, key="d_y2")
 drawer_roi = [drawer_x1, drawer_y1, drawer_x2, drawer_y2]
 
 # --- INIT SYSTEM ---
@@ -123,7 +123,7 @@ detector.drawer_roi = drawer_roi
 
 # --- MAIN APP LOOP ---
 video_source = st.file_uploader("Tải video giám sát (Test)", type=['mp4', 'mov', 'avi'])
-default_video_path = "./samples/temp_sample.mp4"
+default_video_path = "./samples/temp_sample_2.mp4"
 
 # Ưu tiên dùng video upload, nếu không có thì dùng video mặc định
 final_video_path = None
@@ -137,6 +137,8 @@ elif os.path.exists(default_video_path):
 if final_video_path:
     cap = cv2.VideoCapture(final_video_path)
 
+    detector.reset()
+    
     fps = cap.get(cv2.CAP_PROP_FPS) if cap.get(cv2.CAP_PROP_FPS) > 0 else 30
     recorder = EvidenceRecorder(fps=fps, buffer_seconds=30)
     
@@ -241,6 +243,7 @@ if final_video_path:
             st_state_info.info(f"Last Event: {event}")
 
         st_frame.image(frame_rgb, channels="RGB")
+        time.sleep(0.01)  # Giảm tải CPU
 
     cap.release()
 else:

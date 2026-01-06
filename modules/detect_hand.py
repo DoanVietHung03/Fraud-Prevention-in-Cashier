@@ -32,6 +32,7 @@ class FraudDetector:
         # 1. Cấu hình & Load Model
         self.drawer_roi = drawer_roi
         self.pos_roi = pos_roi
+        self.hand_model_path = hand_model_path
         
         # Load Model TFLite (Két tiền)
         self.interpreter = tflite.Interpreter(model_path=tflite_model_path)
@@ -41,14 +42,7 @@ class FraudDetector:
         self.input_shape = self.input_details[0]['shape']
 
         # Load Model MediaPipe (Tay)
-        base_options = python.BaseOptions(model_asset_path=hand_model_path)
-        options = vision.HandLandmarkerOptions(
-            base_options=base_options,
-            running_mode=vision.RunningMode.VIDEO,
-            num_hands=2,
-            min_hand_detection_confidence=0.5
-        )
-        self.hand_detector = vision.HandLandmarker.create_from_options(options)
+        self._init_mediapipe()
 
         # 2. Logic Variables (FSM)
         self.state = "IDLE"
@@ -80,7 +74,32 @@ class FraudDetector:
         self.MOTION_THRESHOLD = 0.05 # 5% diện tích vùng ROI thay đổi là có chuyển động
         self.ai_cooldown = 0         # Bộ đếm lùi (frames) để giữ AI chạy thêm
         self.is_sleeping = False     # Trạng thái hiện tại của hệ thống
-
+    
+    def _init_mediapipe(self):
+        base_options = python.BaseOptions(model_asset_path=self.hand_model_path)
+        options = vision.HandLandmarkerOptions(
+            base_options=base_options,
+            running_mode=vision.RunningMode.VIDEO,
+            num_hands=2,
+            min_hand_detection_confidence=0.5
+        )
+        self.hand_detector = vision.HandLandmarker.create_from_options(options)
+        
+    def reset(self):
+        """[NEW] Hàm reset trạng thái khi video chạy lại từ đầu"""
+        # 1. Reset Logic Variables
+        self.state = "IDLE"
+        self.frame_count = 0
+        self.drawer_buffer.clear()
+        self.pos_enter_time = None
+        self.is_pressing_pos = False
+        self.ai_cooldown = 0
+        
+        # 2. Reset MediaPipe (QUAN TRỌNG: Fix lỗi timestamp)
+        if hasattr(self, 'hand_detector'):
+            self.hand_detector.close() # Đóng instance cũ
+        self._init_mediapipe()         # Tạo instance mới
+        
     def is_inside_roi(self, x, y, roi):
         x1, y1, x2, y2 = roi
         return x1 <= x <= x2 and y1 <= y <= y2
