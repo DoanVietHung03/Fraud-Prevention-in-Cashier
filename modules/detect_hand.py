@@ -1,6 +1,24 @@
-import cv2
 import os
+import sys
+
+# --- SETUP MÔI TRƯỜNG CHẶN LOG ---
+# Phải đặt trước tất cả các lệnh import thư viện nặng
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'       # Tắt oneDNN custom ops
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'        # Tắt log C++ của TensorFlow (0=ALL, 1=WARN, 2=ERR, 3=FATAL)
+os.environ['GLOG_minloglevel'] = '2'            # Tắt log C++ của MediaPipe
+
 import warnings
+import logging
+
+# Tắt cảnh báo Python (FutureWarning, DeprecationWarning...)
+warnings.filterwarnings('ignore')
+warnings.simplefilter(action='ignore', category=FutureWarning)
+warnings.simplefilter(action='ignore', category=UserWarning)
+
+# Tắt log của Abseil (thư viện log Google dùng cho MediaPipe)
+logging.getLogger('absl').setLevel(logging.ERROR)
+
+import cv2
 import numpy as np
 import time
 import tensorflow.lite as tflite
@@ -8,11 +26,6 @@ from collections import deque
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-
-# Tắt cảnh báo TensorFlow oneDNN
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-warnings.filterwarnings('ignore')
 
 class FraudDetector:
     def __init__(self, tflite_model_path, hand_model_path, drawer_roi, pos_roi):
