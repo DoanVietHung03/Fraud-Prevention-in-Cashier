@@ -40,7 +40,7 @@ class FraudDetector:
         # 2. Logic Variables (FSM)
         self.state = "IDLE"
         self.last_pos_time = 0
-        self.pos_timeout = 30.0 
+        self.pos_timeout = 30.0     # Thời gian chờ từ lúc bấm POS đến lúc mở két
         self.drawer_buffer = deque(maxlen=5) 
         self.frame_count = 0 
         self.last_drawer_status = "CLOSED"
@@ -48,18 +48,23 @@ class FraudDetector:
         self.CLOSE_THRESHOLD = 30
 
         # Variables cho Dwell Time & Refund
-        self.pos_enter_time = None       
-        self.POS_DWELL_THRESHOLD = 0.5   
-        self.is_pressing_pos = False     
-        self.refund_wait_start = 0       
-        self.REFUND_TIMEOUT = 10.0       
+        self.pos_enter_time = None     # Thời điểm tay bắt đầu vào vùng POS  
+        self.POS_DWELL_THRESHOLD = 0.5   # Phải giữ tay 0.5s mới tính là bấm (chống lướt qua)
+        self.is_pressing_pos = False     # Trạng thái xác nhận "Đang bấm thật"
+        
+        # --- VARIABLES CHO QUY TRÌNH NGƯỢC (REFUND) ---
+        self.refund_wait_start = 0       # Thời điểm mở két (trường hợp mở trước)
+        self.REFUND_TIMEOUT = 10.0       # Cho phép 10s để nhập POS sau khi mở két
 
-        # --- [NEW] MOTION GATE SETUP (Tối ưu hóa) ---
-        # Sử dụng Background Subtractor để phát hiện chuyển động thô
+        # --- MOTION GATE SETUP (Tối ưu hóa) ---
+        # Sử dụng Background Subtractor để phát hiện chuyển động thô của pixel
+        # history=500: Học nền trong 500 frame
+        # varThreshold=50: Độ nhạy (cao hơn thì ít nhiễu hơn)
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-            history=500, varThreshold=25, detectShadows=False
+            history=500, varThreshold=50, detectShadows=False
         )
-        self.MOTION_THRESHOLD = 0.02 # 2% diện tích thay đổi là kích hoạt
+        
+        self.MOTION_THRESHOLD = 0.05 # 5% diện tích vùng ROI thay đổi là có chuyển động
         self.ai_cooldown = 0         # Bộ đếm lùi (frames) để giữ AI chạy thêm
         self.is_sleeping = False     # Trạng thái hiện tại của hệ thống
 
@@ -67,7 +72,7 @@ class FraudDetector:
         x1, y1, x2, y2 = roi
         return x1 <= x <= x2 and y1 <= y <= y2
 
-    # --- [NEW] HÀM KIỂM TRA CHUYỂN ĐỘNG (TẦNG 1) ---
+    # --- HÀM KIỂM TRA CHUYỂN ĐỘNG (TẦNG 1) ---
     def _check_motion(self, frame_gray):
         """
         Kiểm tra xem có chuyển động đáng kể trong các vùng ROI hay không.
@@ -129,55 +134,75 @@ class FraudDetector:
             return "CLOSED"
 
     def update_pos_dwell_logic(self, hand_in_pos, current_time):
+        """
+        Logic kiểm tra thời gian lưu trú (Dwell Time)
+        Trả về True nếu tay đã giữ đủ lâu ở vùng POS.
+        """
         valid_click = False
         if hand_in_pos:
             if self.pos_enter_time is None:
-                self.pos_enter_time = current_time 
+                self.pos_enter_time = current_time  # Bắt đầu tính giờ
+
+            # Tính thời gian đã giữ
             elapsed = current_time - self.pos_enter_time
             if elapsed >= self.POS_DWELL_THRESHOLD:
                 self.is_pressing_pos = True
-                valid_click = True 
+                valid_click = True  # Đã xác nhận bấm POS
         else:
+            # Tay rời vùng POS -> Reset thời gian
             self.pos_enter_time = None
             self.is_pressing_pos = False
         return valid_click
 
     def update_fsm(self, drawer_status, hand_in_pos, hand_in_drawer):
         """
-        LOGIC TUẦN TỰ (GIỮ NGUYÊN TỪ CODE CŨ):
+        LOGIC TUẦN TỰ (STRICT SEQUENTIAL FLOW):
+        IDLE -> POS_INTERACTED -> DRAWER_OPENED -> MONEY_ACCESSED -> IDLE
         """
         event = None
         current_time = time.time()
         
+        # 1. CẬP NHẬT LOGIC DWELL TIME TRƯỚC KHI BẤM POS
         is_valid_pos_action = self.update_pos_dwell_logic(hand_in_pos, current_time)
 
-        # --- TRẠNG THÁI: IDLE ---
+        # 1. CẬP NHẬT LOGIC DWELL TIME TRƯỚC
+        # --- TRẠNG THÁI: IDLE (Chờ khách) ---
         if self.state == "IDLE":
             if is_valid_pos_action:
                 self.state = "POS_INTERACTED"
                 self.last_pos_time = current_time
                 event = "1️⃣ STEP 1: Staff Inputting Order (Verified)"
+                
             elif drawer_status == "OPEN":
+                # Thay vì Alarm ngay, chuyển sang trạng thái chờ Refund
                 self.state = "DRAWER_FIRST_WARNING"
                 self.refund_wait_start = current_time
                 event = "⚠️ WARNING: Drawer Opened First (Waiting for POS)"
 
         # --- TRẠNG THÁI: REFUND CHECK ---
         elif self.state == "DRAWER_FIRST_WARNING":
+            # Nếu nhân viên bấm POS bổ sung -> Hợp lệ (Refund/Đổi tiền)
             if is_valid_pos_action:
                 self.state = "IDLE" 
                 event = "✅ Refund/Change Verified (POS Inputted)"
+            
+            # Nếu két đóng lại mà vẫn CHƯA bấm POS -> Bắt đầu nghi ngờ
             elif drawer_status == "CLOSED":
+                # Có thể cho thêm thời gian ngắn sau khi đóng két, nhưng ở đây ta bắt chặt
+                # Nếu đóng két mà chưa nhập POS -> Ăn trộm
                 self.state = "SUSPICIOUS"
                 event = "🚨 ALARM: Transaction Finished without POS (Ghost Refund)"
+                
+            # Nếu mở két quá lâu mà không bấm POS -> Nghi ngờ
             elif (current_time - self.refund_wait_start) > self.REFUND_TIMEOUT:
                 self.state = "SUSPICIOUS"
                 event = "🚨 ALARM: Drawer Left Open too long without POS"
 
-        # --- TRẠNG THÁI: POS INTERACTED ---
+        # --- TRẠNG THÁI: POS INTERACTED (Đã bấm máy, chờ mở két) ---
         elif self.state == "POS_INTERACTED":
             if is_valid_pos_action:
-                self.last_pos_time = current_time 
+                self.last_pos_time = current_time   # Reset timeout
+                
             if drawer_status == "OPEN":
                 if current_time - self.last_pos_time <= self.pos_timeout:
                     self.state = "DRAWER_OPENED"
@@ -185,10 +210,11 @@ class FraudDetector:
                 else:
                     self.state = "SUSPICIOUS"
                     event = "🚨 ALARM: Drawer Opened too late (Timeout)"
+                    
             elif (current_time - self.last_pos_time) > self.pos_timeout:
                 self.state = "IDLE"
 
-        # --- TRẠNG THÁI: DRAWER OPENED ---
+        # --- TRẠNG THÁI: DRAWER OPENED (Két đã mở, chờ lấy tiền) ---
         elif self.state == "DRAWER_OPENED":
             if drawer_status == "CLOSED":
                 self.close_confirm_counter += 1
@@ -202,7 +228,7 @@ class FraudDetector:
                     self.state = "MONEY_ACCESSED"
                     event = "3️⃣ STEP 3: Money Access / Change Given"
 
-        # --- TRẠNG THÁI: MONEY ACCESSED ---
+        # --- TRẠNG THÁI: MONEY ACCESSED (Đang lấy tiền) ---
         elif self.state == "MONEY_ACCESSED":
             if drawer_status == "CLOSED":
                 self.close_confirm_counter += 1
@@ -213,7 +239,7 @@ class FraudDetector:
             else:
                 self.close_confirm_counter = 0
 
-        # --- TRẠNG THÁI: SUSPICIOUS ---
+        # --- TRẠNG THÁI: SUSPICIOUS (Cảnh báo) ---
         elif self.state == "SUSPICIOUS":
             if drawer_status == "CLOSED" and is_valid_pos_action:
                 self.state = "POS_INTERACTED"
@@ -227,15 +253,15 @@ class FraudDetector:
     def process_frame(self, frame, timestamp_ms):
         self.frame_count += 1
         
-        # --- [NEW] BƯỚC 1: MOTION GATING ---
+        # --- BƯỚC 1: MOTION GATING ---
         # Chuyển xám và làm mờ nhẹ để tối ưu tốc độ
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         blurred = cv2.GaussianBlur(gray, (21, 21), 0)
         
         has_motion = self._check_motion(blurred)
         
-        # Logic Quán tính: 
-        # Nếu có động -> Reset cooldown về 60 (2 giây)
+        # Logic quán tính cho AI: 
+        # Nếu có chuyển động pixel -> Reset cooldown về 60 (2 giây)
         # Nếu không -> Giảm dần
         if has_motion:
             self.ai_cooldown = 60
@@ -248,10 +274,11 @@ class FraudDetector:
             # TRẢ VỀ None: Báo hiệu cho app.py biết là AI đang ngủ
             return None, None, self.last_drawer_status
 
-        # --- NẾU CÓ ĐỘNG: CHẠY TIẾP LOGIC AI (PHẦN NÀY NẶNG NHẤT) ---
+        # --- NẾU CÓ CHUYỂN ĐỘNG PIXEL: CHẠY TIẾP LOGIC AI ---
         self.is_sleeping = False
         
-        # 1. Check Drawer
+        # 1. Check Drawer (TFLite): Nếu vừa bấm POS trong vòng 5 giây, thì check két LIÊN TỤC (skip=1)
+        # Nếu đang rảnh (IDLE), thì check thưa ra (skip=2) để đỡ nóng máy
         is_urgent = (time.time() - self.last_pos_time < 5.0) and (self.state == "POS_INTERACTED")
         if is_urgent or (self.frame_count % 2 == 0):
             drawer_status = self.classify_drawer(frame)
@@ -269,11 +296,17 @@ class FraudDetector:
 
         if detection_result.hand_landmarks:
             for landmarks in detection_result.hand_landmarks:
+                # Danh sách các điểm quan trọng: Cổ tay, Ngón cái, Ngón trỏ, Ngón giữa
                 important_points = [landmarks[0], landmarks[4], landmarks[8], landmarks[12]]
+                
+                # Check vùng POS
                 if any(self.is_inside_roi(pt.x * w, pt.y * h, self.pos_roi) for pt in important_points):
                     hand_in_pos = True
+                    
+                # Check vùng DRAWER
                 if any(self.is_inside_roi(pt.x * w, pt.y * h, self.drawer_roi) for pt in important_points):
                     hand_in_drawer = True
+                    
                 if hand_in_pos or hand_in_drawer: break
         
         # 3. Cập nhật FSM Logic

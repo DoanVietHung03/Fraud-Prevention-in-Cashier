@@ -9,34 +9,43 @@ from datetime import datetime
 
 from modules.detect_hand import FraudDetector
 
-# --- EVIDENCES RECORDING (GIỮ NGUYÊN) ---
+# --- EVIDENCES RECORDING ---
 class EvidenceRecorder:
     def __init__(self, output_folder="evidence_clips", fps=30, buffer_seconds=30):
         self.output_folder = output_folder
         self.fps = fps
+        
+        # Ring Buffer: Giữ video quá khứ
         self.ring_buffer = deque(maxlen=int(fps * buffer_seconds))
         self.is_recording = False
         self.frames_to_record = 0
         self.temp_evidence = []
-        self.event_type = "UNKNOWN" 
+        self.event_type = "UNKNOWN"     # Lưu loại sự kiện (WARNING, ALARM, UNKNOWN)
         
         if not os.path.exists(output_folder): os.makedirs(output_folder)
 
     def add_frame(self, frame):
-        self.ring_buffer.append(frame) 
+        self.ring_buffer.append(frame)      # Luôn lưu vào bộ nhớ tạm
         if self.is_recording:
             self.temp_evidence.append(frame)
             self.frames_to_record -= 1
             if self.frames_to_record <= 0: self.stop_and_save()
 
     def trigger_save(self, event_type="ALARM", duration_future=30):
+        """
+        event_type: "ALARM" hoặc "WARNING"
+        duration_future: Số giây muốn ghi thêm vào tương lai (mặc định 30s)
+        """
         if self.is_recording:
             # Nếu đang ghi WARNING mà có ALARM -> Nâng cấp lên ALARM
             if event_type == "ALARM" and self.event_type == "WARNING":
                 self.event_type = "ALARM"
+                
+                # Gia hạn thêm thời gian ghi nếu cần
                 self.frames_to_record = max(self.frames_to_record, int(self.fps * duration_future))
-            return False 
+            return False    # Đang ghi rồi thì không kích hoạt mới
 
+        # Nếu chưa ghi thì bắt đầu ghi
         self.is_recording = True
         self.event_type = event_type
         self.frames_to_record = int(self.fps * duration_future)
@@ -45,6 +54,8 @@ class EvidenceRecorder:
 
     def _save(self, frames, event_label):
         if not frames: return
+        
+        # Tên file sẽ có dạng: evidence_ALARM_2024... hoặc evidence_WARNING_2024...
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f"{self.output_folder}/evidence_{event_label}_{timestamp}.mp4"
 
@@ -53,12 +64,14 @@ class EvidenceRecorder:
             out = cv2.VideoWriter(filename, cv2.VideoWriter_fourcc(*'mp4v'), self.fps, (w, h))
             for f in frames: out.write(cv2.cvtColor(f, cv2.COLOR_RGB2BGR)) 
             out.release()
-            print(f"Saved: {filename}")
+            print(f"✅ Saved: {filename}")
         except Exception as e:
-            print(f"Error saving video: {e}")
+            print(f" ❌ Error saving video: {e}")
     
     def stop_and_save(self):
         self.is_recording = False
+        
+        # Truyền event_type hiện tại vào thread save
         threading.Thread(target=self._save, args=(self.temp_evidence.copy(), self.event_type)).start()
         self.temp_evidence = []
 
@@ -67,7 +80,7 @@ class EvidenceRecorder:
 st.set_page_config(page_title="Smart Retail Monitor", layout="wide")
 st.title("🛡️ AI Fraud Detection: Hybrid (Motion Gate + FSM)")
 
-# --- CẤU HÌNH SIDEBAR (GIỮ NGUYÊN) ---
+# --- CẤU HÌNH SIDEBAR ---
 st.sidebar.header("1. Cấu hình Model")
 model_hand_path = st.sidebar.text_input("Đường dẫn Model Tay (.task)", "./models/hand_landmarker.task")
 model_drawer_path = st.sidebar.text_input("Đường dẫn Model Két (.tflite)", "./models/pos_classification.tflite")
@@ -75,12 +88,14 @@ model_drawer_path = st.sidebar.text_input("Đường dẫn Model Két (.tflite)"
 st.sidebar.header("2. Cấu hình Vùng (ROI)")
 st.sidebar.info("💡 Kéo thanh trượt sao cho khung khớp vị trí thực tế.")
 
+# 1. Cấu hình POS (Green)
 pos_x1 = st.sidebar.slider("POS X1", 0, 1280, 427, key="p_x1")
 pos_y1 = st.sidebar.slider("POS Y1", 0, 720, 185, key="p_y1")
 pos_x2 = st.sidebar.slider("POS X2", 0, 1280, 680, key="p_x2")
 pos_y2 = st.sidebar.slider("POS Y2", 0, 720, 406, key="p_y2")
 pos_roi = [pos_x1, pos_y1, pos_x2, pos_y2]
 
+# 2. Cấu hình Két Tiền (Red/Dynamic)
 drawer_x1 = st.sidebar.slider("Drawer X1", 0, 1280, 650, key="d_x1")
 drawer_y1 = st.sidebar.slider("Drawer Y1", 0, 720, 98, key="d_y1")
 drawer_x2 = st.sidebar.slider("Drawer X2", 0, 1280, 830, key="d_x2")
@@ -90,16 +105,18 @@ drawer_roi = [drawer_x1, drawer_y1, drawer_x2, drawer_y2]
 # --- INIT SYSTEM ---
 if 'detector' not in st.session_state:
     try:
+        # Kiểm tra file tồn tại chưa để tránh crash
         if os.path.exists(model_hand_path) and os.path.exists(model_drawer_path):
             st.session_state.detector = FraudDetector(model_drawer_path, model_hand_path, drawer_roi, pos_roi)
         else:
-            st.error("Model file not found! Please check paths.")
+            st.error("⚠️ Model file not found! Please check paths.")
             st.stop()
     except Exception as e:
         st.error(f"Lỗi khởi tạo: {e}")
         st.stop()
 
 detector = st.session_state.detector
+
 # Cập nhật ROI realtime khi kéo slider
 detector.pos_roi = pos_roi
 detector.drawer_roi = drawer_roi
@@ -108,6 +125,7 @@ detector.drawer_roi = drawer_roi
 video_source = st.file_uploader("Tải video giám sát (Test)", type=['mp4', 'mov', 'avi'])
 default_video_path = "./samples/temp_sample.mp4"
 
+# Ưu tiên dùng video upload, nếu không có thì dùng video mặc định
 final_video_path = None
 if video_source:
     with open("temp_upload.mp4", "wb") as f:
@@ -127,7 +145,7 @@ if final_video_path:
         st_frame = st.empty()
     with col2:
         st.subheader("📡 Nhật ký Hệ thống")
-        st_mode = st.empty() # [NEW] Hiển thị chế độ Ngủ/Thức
+        st_mode = st.empty() # Hiển thị chế độ Ngủ/Thức
         st_log = st.empty()
         st_state_info = st.empty()
     
@@ -149,21 +167,27 @@ if final_video_path:
         recorder.add_frame(frame_rgb)
 
         if event:
+            # 1. Trường hợp BÁO ĐỘNG ĐỎ (Trộm / Ghost Refund)
             if "ALARM" in event:
+                # Ghi ngay, gán nhãn ALARM, ghi thêm 30s tương lai
                 if recorder.trigger_save(event_type="ALARM", duration_future=30):
                     st.toast("🚨 PHÁT HIỆN VI PHẠM! Đang lưu bằng chứng...", icon="🔥")
+                    
+            # 2. Trường hợp CẢNH BÁO VÀNG (Mở két trước - Chờ Refund)
             elif "WARNING" in event:
+                # Ghi ngay, gán nhãn WARNING, ghi thêm 30s tương lai (để chờ xem có nhập POS không)
                 if recorder.trigger_save(event_type="WARNING", duration_future=30):
                     st.toast("⚠️ Cảnh báo quy trình! Đang lưu clip đối soát.", icon="📹")
 
         # --- HIỂN THỊ TRẠNG THÁI REC ---
         if recorder.is_recording:
+            # Đổi màu icon REC dựa theo loại sự kiện
             rec_color = (255, 0, 0) if recorder.event_type == "ALARM" else (0, 165, 255)
             cv2.circle(frame_rgb, (30, 30), 10, rec_color, -1)
             cv2.putText(frame_rgb, f"REC [{recorder.event_type}]", (50, 35), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, rec_color, 2)
         
-        # --- [NEW] HIỂN THỊ TRẠNG THÁI NGỦ/THỨC ---
+        # --- HIỂN THỊ TRẠNG THÁI NGỦ/THỨC ---
         if detector.is_sleeping:
             st_mode.success("🌙 MODE: SLEEP (Motion Gate Active)")
             # Vẽ overlay mờ để báo hiệu hệ thống đang tiết kiệm điện
