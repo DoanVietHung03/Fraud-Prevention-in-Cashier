@@ -86,8 +86,12 @@ class FraudDetector:
         
         # --- CẤU HÌNH PHÁT HIỆN CHE CHẮN (OCCLUSION) ---
         self.block_counter = 0
-        self.BLOCK_THRESHOLD = 150  # ~5 giây (30fps)
-        self.BLOCK_RATIO = 0.4      # Nếu vật thể lạ chiếm > 40% diện tích két
+        self.BLOCK_THRESHOLD = 30  # ~1 giây (30fps)
+        self.ref_hist = None        # Lưu histogram chuẩn của két
+        self.HIST_THRESHOLD = 0.3   # Độ giống nhau dưới 30% -> Bị che chắn
+        
+        # Lưu sự kiện cuối cùng để tránh lặp lại
+        self.last_sent_event = None
 
     def reset(self):
         """Reset trạng thái logic, KHÔNG reload model để tránh lag"""
@@ -100,6 +104,18 @@ class FraudDetector:
         self.last_transaction_end_time = 0
         self.drawer_open_start_time = 0
         self.close_confirm_counter = 0
+        
+    def _filter_duplicate_event(self, raw_event):
+        """
+        Chỉ trả về event nếu nó KHÁC với event vừa gửi trước đó.
+        Giúp log không bị spam cùng 1 nội dung.
+        """
+        if raw_event == self.last_sent_event:
+            return None  # Giống hệt cái trước -> Bỏ qua
+        
+        # Nếu khác -> Cập nhật lại và trả về
+        self.last_sent_event = raw_event
+        return raw_event
         
     def is_inside_roi(self, x, y, roi):
         x1, y1, x2, y2 = roi
@@ -221,37 +237,58 @@ class FraudDetector:
         
         return is_too_dark or is_flat_color
     
-    def check_drawer_blocking(self, frame_gray, hand_in_drawer):
-        """
-        Kiểm tra xem vùng Drawer có bị vật thể lạ che chắn không.
-        Điều kiện trả về True:
-        1. Có vật thể chiếm dụng diện tích lớn (ratio > threshold).
-        2. VÀ vật thể đó KHÔNG phải là tay (hand_in_drawer == False).
-        """
-        # Lấy mask chuyển động/vật thể lạ từ Background Subtractor (đã có trong code cũ)
-        mask = self.bg_subtractor.apply(frame_gray)
-        
-        # Cắt vùng Drawer từ mask
+    def calculate_roi_histogram(self, frame_bgr):
+        """Tính biểu đồ màu (Histogram) của vùng Drawer"""
         x1, y1, x2, y2 = self.drawer_roi
-        h, w = mask.shape
-        # Clamp tọa độ để không lỗi index
+        h, w, _ = frame_bgr.shape
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(w, x2), min(h, y2)
         
-        drawer_mask = mask[y1:y2, x1:x2]
-        if drawer_mask.size == 0: return False
+        roi = frame_bgr[y1:y2, x1:x2]
+        if roi.size == 0: return None
 
-        # Tính tỷ lệ điểm trắng (vật thể lạ) trên tổng diện tích két
-        non_zero = cv2.countNonZero(drawer_mask)
-        ratio = non_zero / drawer_mask.size
+        # Chuyển sang HSV để tách biệt màu sắc tốt hơn độ sáng
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         
-        # LOGIC QUAN TRỌNG:
-        # Nếu có vật thể lạ chiếm diện tích lớn (>40%) 
-        # NHƯNG AI không thấy tay đâu cả -> Khả năng cao là thân người/vật che chắn
-        if ratio > self.BLOCK_RATIO and (not hand_in_drawer):
-            return True
+        # Tính histogram cho kênh Hue (Màu) và Saturation (Độ đậm)
+        # Bỏ qua kênh Value (Độ sáng) để hạn chế lỗi do bóng râm
+        hist = cv2.calcHist([hsv], [0, 1], None, [50, 60], [0, 180, 0, 256])
+        cv2.normalize(hist, hist, 0, 1, cv2.NORM_MINMAX)
+        return hist
+    
+    def check_drawer_blocking(self, frame_color, hand_in_drawer):
+        """
+        Kiểm tra che chắn bằng Histogram.
+        Lưu ý: frame_color phải là ảnh màu (RGB).
+        """
+        x1, y1, x2, y2 = self.drawer_roi
+        h, w, _ = frame_color.shape # Lấy 3 kênh màu
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
         
-        return False
+        roi = frame_color[y1:y2, x1:x2]
+        if roi.size == 0: return False
+
+        # Chuyển từ RGB sang HSV để lấy thông tin màu chính xác hơn
+        # (Trong app.py bạn đang gửi frame dạng RGB vào đây)
+        hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
+        
+        # Tính Histogram kênh H (Màu) và S (Độ đậm), bỏ qua V (Độ sáng)
+        hist = cv2.calcHist([hsv], [0, 1], None, [50, 60], [0, 180, 0, 256])
+        cv2.normalize(hist, hist, 0, 1, cv2.NORM_MINMAX)
+        
+        # Nếu chưa có mẫu chuẩn thì lấy mẫu ngay bây giờ
+        if self.ref_hist is None:
+            self.ref_hist = hist
+            return False
+            
+        # So sánh với mẫu chuẩn
+        similarity = cv2.compareHist(self.ref_hist, hist, cv2.HISTCMP_CORREL)
+        
+        # Ngưỡng 0.5 - 0.6 là an toàn để phát hiện vật lạ khác màu
+        is_blocked = (similarity < self.HIST_THRESHOLD) and (not hand_in_drawer)
+        
+        return is_blocked
 
     def update_fsm(self, drawer_status, hand_in_pos, hand_in_drawer):
         event = None
@@ -321,6 +358,7 @@ class FraudDetector:
                 if self.close_confirm_counter > self.CLOSE_THRESHOLD:
                     self.state = "IDLE"
                     event = "✅ STEP 4: Cycle Complete - Drawer Closed"
+                    self.ref_hist = None  # Reset mẫu histogram chuẩn
                     self.last_transaction_end_time = current_time
                     self.close_confirm_counter = 0
             else:
@@ -426,25 +464,37 @@ class FraudDetector:
         
         # --- TẦNG 4: CHECK CHE KHUẤT KÉT (Occlusion) ---
         # Chỉ check khi Két Đóng + Không có tay (để tránh báo giả khi nhân viên đang thao tác)
-        blocking_msg = None
+        raw_blocking_msg = None
         if drawer_status == "CLOSED" and not hand_in_drawer:
-            is_blocked = self.check_drawer_blocking(gray, hand_in_drawer)
+            is_blocked = self.check_drawer_blocking(frame, hand_in_drawer)
             if is_blocked:
                 self.block_counter += 1
             else:
                 if self.block_counter > 0: self.block_counter -= 1
             
             if self.block_counter > self.BLOCK_THRESHOLD:
-                blocking_msg = "⚠️ WARNING: Drawer View Blocked by Body/Object"
+                raw_blocking_msg = "⚠️ WARNING: Drawer View Blocked by Body/Object"
         else:
             self.block_counter = 0 # Reset khi két mở hoặc có tay
 
         # --- TẦNG 5: UPDATE LOGIC (FSM) ---
-        fsm_event = self.update_fsm(drawer_status, hand_in_pos, hand_in_drawer)
+        raw_fsm_event = self.update_fsm(drawer_status, hand_in_pos, hand_in_drawer)
         
-        # Quyết định thông báo nào quan trọng hơn để hiển thị
-        final_event = fsm_event
-        if not final_event and blocking_msg:
-            final_event = blocking_msg # Chỉ hiện cảnh báo che khuất nếu không có sự kiện AI nào khác
+        # --- CHỌN SỰ KIỆN ƯU TIÊN (PRIORITY) ---
+        # Quy tắc: FSM (Quy trình/Alarm) quan trọng hơn Blocking (Che khuất)
+        # Nếu có cả 2, chỉ hiện FSM.
+        
+        final_raw_event = None
+        
+        if raw_fsm_event:
+            final_raw_event = raw_fsm_event
+        elif raw_blocking_msg:
+            final_raw_event = raw_blocking_msg
+            
+        # --- TẦNG 6: LỌC TRÙNG LẶP (DE-DUPLICATION) ---
+        # Đây là bước chặn spam. 
+        # Ví dụ: Frame 1 ra "ALARM", Frame 2 ra "ALARM" -> Hàm này sẽ biến Frame 2 thành None.
+        
+        filtered_event = self._filter_duplicate_event(final_raw_event)
 
-        return detection_result, final_event, drawer_status
+        return detection_result, filtered_event, drawer_status
