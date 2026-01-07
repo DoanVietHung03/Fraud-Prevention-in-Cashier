@@ -153,7 +153,7 @@ class FraudDetector:
         self.interpreter.invoke()
         output_data = self.interpreter.get_tensor(self.output_details[0]['index'])
         
-        # open_score: Xác suất mở
+        # open_score: Xác suất mở két
         open_score = output_data[0][0]
         
         is_open = False
@@ -341,7 +341,10 @@ class FraudDetector:
         h, w, _ = frame.shape
 
         if detection_result.hand_landmarks:
-            for landmarks in detection_result.hand_landmarks:
+            for i, landmarks in enumerate(detection_result.hand_landmarks):
+                score = detection_result.handedness[i][0].score
+                if score < 0.6: continue
+                
                 # Chỉ lấy đầu ngón trỏ (8) và cổ tay (0) để check nhanh hơn
                 points_to_check = [landmarks[8], landmarks[0]]
                 
