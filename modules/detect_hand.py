@@ -92,6 +92,9 @@ class FraudDetector:
         
         # Lưu sự kiện cuối cùng để tránh lặp lại
         self.last_sent_event = None
+        
+        # Flag theo dõi có bị che chắn trong chu kỳ hiện tại không
+        self.was_blocked_during_cycle = False
 
     def reset(self):
         """Reset trạng thái logic, KHÔNG reload model để tránh lag"""
@@ -315,6 +318,7 @@ class FraudDetector:
                      
                 self.state = "POS_INTERACTED"
                 self.last_pos_time = current_time
+                self.was_blocked_during_cycle = False
                 
             elif drawer_status == "OPEN":
                 self.state = "SUSPICIOUS"
@@ -340,15 +344,21 @@ class FraudDetector:
                 self.close_confirm_counter += 1
                 if self.close_confirm_counter > self.CLOSE_THRESHOLD:
                     self.state = "IDLE"
-                    event = "✅ Transaction Ended (No money access detected)"
                     self.last_transaction_end_time = current_time
                     self.close_confirm_counter = 0
+                    self.ref_hist = None
+                    
+                    if self.was_blocked_during_cycle:
+                        # Nếu từng bị che -> Báo động nghi vấn
+                        event = "⚠️ Transaction Ended with BLOCKED VIEW (Suspicious!)"
+                    else:
+                        # Nếu sạch sẽ -> Báo an toàn
+                        event = "✅ Transaction Ended (No money access detected)"
+                    
+                    # Reset cờ sau khi báo cáo xong
+                    self.was_blocked_during_cycle = False
             else:
-                self.close_confirm_counter = 0
-                if (current_time - self.drawer_open_start_time) > self.DRAWER_OPEN_MAX_TIME:
-                    self.state = "SUSPICIOUS"
-                    event = "🚨 ALARM: Drawer Left Open TOO LONG (> 60s)!"
-                elif hand_in_drawer:
+                if hand_in_drawer:
                     self.state = "MONEY_ACCESSED"
                     event = "3️⃣ STEP 3: Money Access / Change Given"
 
@@ -357,10 +367,16 @@ class FraudDetector:
                 self.close_confirm_counter += 1
                 if self.close_confirm_counter > self.CLOSE_THRESHOLD:
                     self.state = "IDLE"
-                    event = "✅ STEP 4: Cycle Complete - Drawer Closed"
                     self.ref_hist = None  # Reset mẫu histogram chuẩn
                     self.last_transaction_end_time = current_time
                     self.close_confirm_counter = 0
+                    
+                    if self.was_blocked_during_cycle:
+                        event = "⚠️ Transaction Ended with BLOCKED VIEW (Suspicious!)"
+                    else:
+                        event = "✅ STEP 4: Cycle Complete - Drawer Closed"
+                    
+                    self.was_blocked_during_cycle = False
             else:
                 self.close_confirm_counter = 0
                 if (current_time - self.drawer_open_start_time) > self.DRAWER_OPEN_MAX_TIME:
@@ -469,6 +485,9 @@ class FraudDetector:
             is_blocked = self.check_drawer_blocking(frame, hand_in_drawer)
             if is_blocked:
                 self.block_counter += 1
+                # Nếu bộ đếm xác nhận là bị che thật (vượt ngưỡng), đánh dấu giao dịch này là "Bẩn"
+                if self.block_counter > self.BLOCK_THRESHOLD:
+                    self.was_blocked_during_cycle = True
             else:
                 if self.block_counter > 0: self.block_counter -= 1
             
