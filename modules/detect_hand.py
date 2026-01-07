@@ -280,12 +280,6 @@ class FraudDetector:
             is_valid_pos_action = self.update_pos_dwell_logic(hand_in_pos, current_time)
 
         # 1. CẬP NHẬT LOGIC DWELL TIME TRƯỚC
-        # --- TRẠNG THÁI: CHE CAMERA (BLOCKED) ---
-        if drawer_status == "BLOCKED":
-            self.state = "SUSPICIOUS"
-            event = "🚨 ALARM: Camera View Blocked/Covered!"
-            return event
-        
         # --- TRẠNG THÁI: IDLE (Chờ khách) ---
         if self.state == "IDLE":
             if is_valid_pos_action:
