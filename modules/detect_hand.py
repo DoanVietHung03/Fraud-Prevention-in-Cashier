@@ -79,6 +79,15 @@ class FraudDetector:
         
         # MediaPipe Timestamp
         self.mp_internal_timestamp_ms = 0
+        
+        # --- CẤU HÌNH CAMERA TAMPERING (Che Camera) ---
+        self.tamper_counter = 0
+        self.TAMPER_THRESHOLD = 90  # ~3 giây (30fps)
+        
+        # --- CẤU HÌNH PHÁT HIỆN CHE CHẮN (OCCLUSION) ---
+        self.block_counter = 0
+        self.BLOCK_THRESHOLD = 150  # ~5 giây (30fps)
+        self.BLOCK_RATIO = 0.4      # Nếu vật thể lạ chiếm > 40% diện tích két
 
     def reset(self):
         """Reset trạng thái logic, KHÔNG reload model để tránh lag"""
@@ -196,6 +205,53 @@ class FraudDetector:
             self.pos_enter_time = None
             self.is_pressing_pos = False
         return valid_click
+    
+    def check_camera_tampering(self, gray_frame):
+        """Kiểm tra camera có bị che kín hoặc mất hình không"""
+        # Tính trung bình độ sáng (mean) và độ tương phản (std_dev)
+        mean, std_dev = cv2.meanStdDev(gray_frame)
+        avg_brightness = mean[0][0]
+        contrast = std_dev[0][0]
+        
+        # Ngưỡng 1: Quá tối (Che kín mít) - Giá trị < 30
+        is_too_dark = avg_brightness < 30 
+        
+        # Ngưỡng 2: Quá phẳng/mờ (Che bằng giấy/vật đồng màu) - Contrast < 10
+        is_flat_color = contrast < 10 
+        
+        return is_too_dark or is_flat_color
+    
+    def check_drawer_blocking(self, frame_gray, hand_in_drawer):
+        """
+        Kiểm tra xem vùng Drawer có bị vật thể lạ che chắn không.
+        Điều kiện trả về True:
+        1. Có vật thể chiếm dụng diện tích lớn (ratio > threshold).
+        2. VÀ vật thể đó KHÔNG phải là tay (hand_in_drawer == False).
+        """
+        # Lấy mask chuyển động/vật thể lạ từ Background Subtractor (đã có trong code cũ)
+        mask = self.bg_subtractor.apply(frame_gray)
+        
+        # Cắt vùng Drawer từ mask
+        x1, y1, x2, y2 = self.drawer_roi
+        h, w = mask.shape
+        # Clamp tọa độ để không lỗi index
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        
+        drawer_mask = mask[y1:y2, x1:x2]
+        if drawer_mask.size == 0: return False
+
+        # Tính tỷ lệ điểm trắng (vật thể lạ) trên tổng diện tích két
+        non_zero = cv2.countNonZero(drawer_mask)
+        ratio = non_zero / drawer_mask.size
+        
+        # LOGIC QUAN TRỌNG:
+        # Nếu có vật thể lạ chiếm diện tích lớn (>40%) 
+        # NHƯNG AI không thấy tay đâu cả -> Khả năng cao là thân người/vật che chắn
+        if ratio > self.BLOCK_RATIO and (not hand_in_drawer):
+            return True
+        
+        return False
 
     def update_fsm(self, drawer_status, hand_in_pos, hand_in_drawer):
         event = None
@@ -285,10 +341,20 @@ class FraudDetector:
 
     def process_frame(self, frame, timestamp_ms):
         self.frame_count += 1
-        
-        # --- BƯỚC 1: MOTION GATING (Tầng lọc thô) ---
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         
+        # --- TẦNG 1: KIỂM TRA PHÁ HOẠI CAMERA (Priority Max) ---
+        # Nếu camera bị che, AI bên dưới vô dụng -> Return sớm để báo động
+        if self.check_camera_tampering(gray):
+            self.tamper_counter += 1
+        else:
+            if self.tamper_counter > 0: self.tamper_counter -= 2 # Giảm dần để chống nháy
+            
+        if self.tamper_counter > self.TAMPER_THRESHOLD:
+            # Vẫn trả về detection_result rỗng để app không crash
+            return None, "🚨 ALARM: Camera is BLOCKED/OBSTRUCTED!", self.last_drawer_status
+        
+        # --- TẦNG 2: MOTION GATING (Tiết kiệm CPU) ---
         # Chỉ check motion mỗi 2 frame để giảm tải CPU
         if self.frame_count % 2 == 0:
             has_motion = self._check_motion(gray)
@@ -308,14 +374,15 @@ class FraudDetector:
 
         self.is_sleeping = False
         
-        # --- BƯỚC 2: AI LOGIC ---
+        # --- TẦNG 3: AI NHẬN DIỆN (Drawer & Hand) ---
         
-        # 2.1 Check Drawer
+        # 3.1 Check Drawer (Ưu tiên cao khi đang có giao dịch)
         # Nếu đang có giao dịch (POS_INTERACTED) thì check liên tục (độ ưu tiên cao)
         # Nếu đang rảnh, check thưa hơn (mỗi 3 frame) để tiết kiệm
         check_drawer_now = True
         if self.state == "IDLE":
-             if self.frame_count % 3 != 0: check_drawer_now = False
+            if self.frame_count % 3 != 0: 
+                check_drawer_now = False
         
         if check_drawer_now:
             drawer_status = self.classify_drawer(frame)
@@ -323,7 +390,7 @@ class FraudDetector:
         else:
             drawer_status = self.last_drawer_status
 
-        # 2.2 Check Hand (MediaPipe)
+        # 3.2 Check Hand (MediaPipe)
         # Convert MediaPipe Image
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
         
@@ -331,7 +398,6 @@ class FraudDetector:
         # Đảm bảo timestamp luôn lớn hơn lần trước ít nhất 1ms (phòng trường hợp máy chạy quá nhanh)
         if current_sys_time_ms <= self.mp_internal_timestamp_ms:
             current_sys_time_ms = self.mp_internal_timestamp_ms + 1
-            
         self.mp_internal_timestamp_ms = current_sys_time_ms
         
         detection_result = self.hand_detector.detect_for_video(mp_image, self.mp_internal_timestamp_ms)
@@ -358,7 +424,27 @@ class FraudDetector:
                     if any(self.is_inside_roi(pt.x * w, pt.y * h, self.drawer_roi) for pt in points_to_check):
                         hand_in_drawer = True
         
-        # 3. Cập nhật FSM Logic
-        event = self.update_fsm(drawer_status, hand_in_pos, hand_in_drawer)
+        # --- TẦNG 4: CHECK CHE KHUẤT KÉT (Occlusion) ---
+        # Chỉ check khi Két Đóng + Không có tay (để tránh báo giả khi nhân viên đang thao tác)
+        blocking_msg = None
+        if drawer_status == "CLOSED" and not hand_in_drawer:
+            is_blocked = self.check_drawer_blocking(gray, hand_in_drawer)
+            if is_blocked:
+                self.block_counter += 1
+            else:
+                if self.block_counter > 0: self.block_counter -= 1
+            
+            if self.block_counter > self.BLOCK_THRESHOLD:
+                blocking_msg = "⚠️ WARNING: Drawer View Blocked by Body/Object"
+        else:
+            self.block_counter = 0 # Reset khi két mở hoặc có tay
+
+        # --- TẦNG 5: UPDATE LOGIC (FSM) ---
+        fsm_event = self.update_fsm(drawer_status, hand_in_pos, hand_in_drawer)
         
-        return detection_result, event, drawer_status
+        # Quyết định thông báo nào quan trọng hơn để hiển thị
+        final_event = fsm_event
+        if not final_event and blocking_msg:
+            final_event = blocking_msg # Chỉ hiện cảnh báo che khuất nếu không có sự kiện AI nào khác
+
+        return detection_result, final_event, drawer_status
