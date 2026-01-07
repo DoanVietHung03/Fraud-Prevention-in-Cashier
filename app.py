@@ -146,7 +146,7 @@ for key, val in defaults.items():
 
 # --- SIDEBAR: CẤU HÌNH ---
 video_source = st.file_uploader("Tải video giám sát", type=['mp4', 'mov', 'avi'])
-default_video_path = "./samples_demo/drawer_obscured/test.mp4"
+default_video_path = "./samples_demo/cancel_bill/test.mp4"
 final_video_path = None
 
 if video_source:
