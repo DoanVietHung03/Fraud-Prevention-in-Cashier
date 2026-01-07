@@ -97,7 +97,7 @@ pos_roi = [pos_x1, pos_y1, pos_x2, pos_y2]
 
 # 2. Cấu hình Két Tiền (Red/Dynamic)
 drawer_x1 = st.sidebar.slider("DRAWER X1", 0, 1280, 164, key="d_x1")
-drawer_y1 = st.sidebar.slider("DRAWER Y1", 0, 720, 150, key="d_y1")
+drawer_y1 = st.sidebar.slider("DRAWER Y1", 0, 720, 155, key="d_y1")
 drawer_x2 = st.sidebar.slider("DRAWER X2", 0, 1280, 306, key="d_x2")
 drawer_y2 = st.sidebar.slider("DRAWER Y2", 0, 720, 200, key="d_y2")
 drawer_roi = [drawer_x1, drawer_y1, drawer_x2, drawer_y2]
@@ -123,7 +123,7 @@ detector.drawer_roi = drawer_roi
 
 # --- MAIN APP LOOP ---
 video_source = st.file_uploader("Tải video giám sát (Test)", type=['mp4', 'mov', 'avi'])
-default_video_path = "./samples_demo/good_procedure/test.mp4"
+default_video_path = "./samples_demo/No_pos_interact/test.mp4"
 
 # Ưu tiên dùng video upload, nếu không có thì dùng video mặc định
 final_video_path = None
@@ -192,22 +192,8 @@ if final_video_path:
         # --- HIỂN THỊ TRẠNG THÁI NGỦ/THỨC ---
         if detector.is_sleeping:
             st_mode.success("🌙 MODE: SLEEP (Motion Gate Active)")
-            # Vẽ overlay mờ để báo hiệu hệ thống đang tiết kiệm điện
-            overlay = frame_rgb.copy()
-            cv2.rectangle(overlay, (0,0), (400, 60), (0,0,0), -1)
-            cv2.addWeighted(overlay, 0.5, frame_rgb, 0.5, 0, frame_rgb)
-            cv2.putText(frame_rgb, "💤 AI SLEEPING (NO MOTION)", (10, 40), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         else:
             st_mode.warning("⚡ MODE: ACTIVE (AI Processing)")
-            # Chỉ vẽ tay khi có kết quả detect (không phải None)
-            if detection_result and detection_result.hand_landmarks:
-                for landmarks in detection_result.hand_landmarks:
-                    wrist = landmarks[0]
-                    index_finger = landmarks[8]
-                    h, w, _ = frame.shape
-                    cx, cy = int(((wrist.x + index_finger.x) / 2) * w), int(((wrist.y + index_finger.y) / 2) * h)
-                    cv2.circle(frame_rgb, (cx, cy), 5, (255, 255, 0), -1)
 
         # --- VẼ GIAO DIỆN ROI ---
         cv2.rectangle(frame_rgb, (pos_roi[0], pos_roi[1]), (pos_roi[2], pos_roi[3]), (0, 255, 0), 2)
@@ -220,14 +206,14 @@ if final_video_path:
         else:
             box_color = (128, 128, 128)
             box_thick = 1
-            status_lbl = "Drawer Closed"
+            status_lbl = "Drawer CLOSED"
             
         cv2.rectangle(frame_rgb, (drawer_roi[0], drawer_roi[1]), (drawer_roi[2], drawer_roi[3]), box_color, box_thick)
         cv2.putText(frame_rgb, status_lbl, (drawer_roi[0], drawer_roi[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 1)
 
         # Hiển thị State
         state_color = (255, 0, 0) if detector.state == "SUSPICIOUS" else (0, 255, 0)
-        cv2.putText(frame_rgb, f"STATE: {detector.state}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, state_color, 1)
+        cv2.putText(frame_rgb, f"STATE: {detector.state}", (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, state_color, 1)
         
         # --- UPDATE LOGS ---
         if event:
@@ -243,7 +229,7 @@ if final_video_path:
             st_state_info.info(f"Last Event: {event}")
 
         st_frame.image(frame_rgb, channels="RGB")
-        time.sleep(0.01)  # Giảm tải CPU
+        time.sleep(0.02)  # Giảm tải CPU
 
     cap.release()
 else:

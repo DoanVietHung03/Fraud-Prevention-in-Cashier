@@ -47,34 +47,33 @@ class FraudDetector:
         # 2. Logic Variables (FSM)
         self.state = "IDLE"
         self.last_pos_time = 0
-        self.pos_timeout = 20.0     # Thời gian chờ từ lúc bấm POS đến lúc mở két
+        self.pos_timeout = 30.0     # Thời gian chờ từ lúc bấm POS đến lúc mở két
         self.drawer_buffer = deque(maxlen=5) 
         self.frame_count = 0 
         self.last_drawer_status = "CLOSED"
         self.close_confirm_counter = 0 
-        self.CLOSE_THRESHOLD = 20
+        self.CLOSE_THRESHOLD = 60  # Số frame liên tiếp két đóng để xác nhận kết đóng
 
         # Variables cho Dwell Time & Refund
         self.pos_enter_time = None     # Thời điểm tay bắt đầu vào vùng POS  
-        self.POS_DWELL_THRESHOLD = 1.0   # Phải giữ tay 1s mới tính là bấm (chống lướt qua)
+        self.POS_DWELL_THRESHOLD = 3.0   # Phải giữ tay 3s mới tính là bấm (chống lướt qua)
         self.is_pressing_pos = False     # Trạng thái xác nhận "Đang bấm thật"
-        
-        # --- VARIABLES CHO QUY TRÌNH NGƯỢC (REFUND) ---
-        self.refund_wait_start = 0       # Thời điểm mở két (trường hợp mở trước)
-        self.REFUND_TIMEOUT = 10.0       # Cho phép 10s để nhập POS sau khi mở két
 
         # --- MOTION GATE SETUP (Tối ưu hóa) ---
         # Sử dụng Background Subtractor để phát hiện chuyển động thô của pixel
         # history=500: Học nền trong 500 frame
         # varThreshold=50: Độ nhạy (cao hơn thì ít nhiễu hơn)
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-            history=300, varThreshold=50, detectShadows=False
+            history=500, varThreshold=50, detectShadows=False
         )
         
-        self.MOTION_THRESHOLD = 0.005 # 0.5% diện tích vùng ROI thay đổi là có chuyển động
+        self.MOTION_THRESHOLD = 0.05 # 5% diện tích vùng ROI thay đổi là có chuyển động
         self.ai_cooldown = 0         # Bộ đếm lùi (frames) để giữ AI chạy thêm
         self.is_sleeping = False     # Trạng thái hiện tại của hệ thống
-        self.EDGE_THRESHOLD = 0.05  # Ngưỡng mật độ biên để xác định két mở
+        self.EDGE_THRESHOLD = 0.03  # Ngưỡng mật độ biên để xác định két mở
+        
+        self.last_transaction_end_time = 0 # Thời điểm kết thúc giao dịch gần nhất
+        self.POST_TRANSACTION_COOLDOWN = 5.0 # Giây (Thời gian "nguội" sau khi đóng két)
     
     def _init_mediapipe(self):
         base_options = python.BaseOptions(model_asset_path=self.hand_model_path)
@@ -193,9 +192,9 @@ class FraudDetector:
 
         # Logic Buffer để làm mượt kết quả
         self.drawer_buffer.append(is_open)
-        print(f'DEBUG BUFFER: {sum(self.drawer_buffer) >= (self.drawer_buffer.maxlen * 0.4)}')
+        # print(f'DEBUG BUFFER: {sum(self.drawer_buffer) >= (self.drawer_buffer.maxlen * 0.4)}')
         
-         # Quyết định cuối cùng dựa trên buffer
+        # Quyết định cuối cùng dựa trên buffer
         if sum(self.drawer_buffer) >= (self.drawer_buffer.maxlen * 0.4):
             return "OPEN"
         else:
@@ -231,7 +230,17 @@ class FraudDetector:
         current_time = time.time()
         
         # 1. CẬP NHẬT LOGIC DWELL TIME TRƯỚC KHI BẤM POS
-        is_valid_pos_action = self.update_pos_dwell_logic(hand_in_pos, current_time)
+        in_cooldown = (current_time - self.last_transaction_end_time) < self.POST_TRANSACTION_COOLDOWN
+        
+        if in_cooldown:
+            # Ép buộc không nhận POS dù tay có để đó
+            is_valid_pos_action = False 
+            # Reset luôn bộ đếm dwell time để tránh cộng dồn
+            self.pos_enter_time = None 
+            self.is_pressing_pos = False
+        else:
+            # Chạy logic bình thường
+            is_valid_pos_action = self.update_pos_dwell_logic(hand_in_pos, current_time)
 
         # 1. CẬP NHẬT LOGIC DWELL TIME TRƯỚC
         # --- TRẠNG THÁI: IDLE (Chờ khách) ---
@@ -242,29 +251,9 @@ class FraudDetector:
                 event = "1️⃣ STEP 1: Staff Inputting Order (Verified)"
                 
             elif drawer_status == "OPEN":
-                # Thay vì Alarm ngay, chuyển sang trạng thái chờ Refund
-                self.state = "DRAWER_FIRST_WARNING"
-                self.refund_wait_start = current_time
-                event = "⚠️ WARNING: Drawer Opened First (Waiting for POS)"
-
-        # --- TRẠNG THÁI: REFUND CHECK ---
-        elif self.state == "DRAWER_FIRST_WARNING":
-            # Nếu nhân viên bấm POS bổ sung -> Hợp lệ (Refund/Đổi tiền)
-            if is_valid_pos_action:
-                self.state = "IDLE" 
-                event = "✅ Refund/Change Verified (POS Inputted)"
-            
-            # Nếu két đóng lại mà vẫn CHƯA bấm POS -> Bắt đầu nghi ngờ
-            elif drawer_status == "CLOSED":
-                # Có thể cho thêm thời gian ngắn sau khi đóng két, nhưng ở đây ta bắt chặt
-                # Nếu đóng két mà chưa nhập POS -> Ăn trộm
+                # Nếu két mở mà không bấm POS -> Ăn trộm
                 self.state = "SUSPICIOUS"
-                event = "🚨 ALARM: Transaction Finished without POS (Ghost Refund)"
-                
-            # Nếu mở két quá lâu mà không bấm POS -> Nghi ngờ
-            elif (current_time - self.refund_wait_start) > self.REFUND_TIMEOUT:
-                self.state = "SUSPICIOUS"
-                event = "🚨 ALARM: Drawer Left Open too long without POS"
+                event = "🚨 ALARM: Drawer Opened without POS (Theft Detected!)"
 
         # --- TRẠNG THÁI: POS INTERACTED (Đã bấm máy, chờ mở két) ---
         elif self.state == "POS_INTERACTED":
@@ -289,6 +278,7 @@ class FraudDetector:
                 if self.close_confirm_counter > self.CLOSE_THRESHOLD:
                     self.state = "IDLE"
                     event = "✅ Transaction Ended (No money access detected)"
+                    self.last_transaction_end_time = current_time
                     self.close_confirm_counter = 0
             else:
                 self.close_confirm_counter = 0
