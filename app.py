@@ -123,7 +123,7 @@ detector.drawer_roi = drawer_roi
 
 # --- MAIN APP LOOP ---
 video_source = st.file_uploader("Tải video giám sát (Test)", type=['mp4', 'mov', 'avi'])
-default_video_path = "./samples_demo/open_drawer_when_refund/test.mp4"
+default_video_path = "./samples_demo/No_pos_interact/test.mp4"
 
 # Ưu tiên dùng video upload, nếu không có thì dùng video mặc định
 final_video_path = None
@@ -205,7 +205,7 @@ if final_video_path:
 
         # Hiển thị State
         state_color = (255, 0, 0) if detector.state == "SUSPICIOUS" else (0, 255, 0)
-        cv2.putText(frame_rgb, f"STATE: {detector.state}", (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, state_color, 1)
+        cv2.putText(frame_rgb, f"STATE: {detector.state}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, state_color, 1)
         
         # --- UPDATE LOGS ---
         if event:

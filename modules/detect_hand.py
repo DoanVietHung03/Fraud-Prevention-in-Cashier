@@ -218,9 +218,8 @@ class FraudDetector:
         # Index 0 = OPEN, Index 1 = CLOSED
         open_score = output_data[0][0]
         
-        # Kiểm tra mật độ biên để tăng độ chính xác
+        # Kiểm tra mật độ biên và dải màu để tăng độ chính xác
         edge_density = self.calculate_edge_density(frame, self.drawer_roi)
-        
         pink_ratio = self.calculate_color_HSV(frame, self.drawer_roi)
 
         if open_score > 0.4 or (open_score > 0.1 and edge_density > self.EDGE_THRESHOLD and pink_ratio > self.COLOR_THRESHOLD):
@@ -281,6 +280,12 @@ class FraudDetector:
             is_valid_pos_action = self.update_pos_dwell_logic(hand_in_pos, current_time)
 
         # 1. CẬP NHẬT LOGIC DWELL TIME TRƯỚC
+        # --- TRẠNG THÁI: CHE CAMERA (BLOCKED) ---
+        if drawer_status == "BLOCKED":
+            self.state = "SUSPICIOUS"
+            event = "🚨 ALARM: Camera View Blocked/Covered!"
+            return event
+        
         # --- TRẠNG THÁI: IDLE (Chờ khách) ---
         if self.state == "IDLE":
             if is_valid_pos_action:
@@ -329,6 +334,7 @@ class FraudDetector:
                     event = "✅ Transaction Ended (No money access detected)"
                     self.last_transaction_end_time = current_time
                     self.close_confirm_counter = 0
+                    self.update_reference_bg(frame)  # Cập nhật ảnh mẫu mới khi két đóng
             else:
                 self.close_confirm_counter = 0
                 # Kiểm tra thời gian mở két quá lâu
