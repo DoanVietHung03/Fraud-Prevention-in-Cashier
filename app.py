@@ -90,16 +90,16 @@ st.sidebar.info("💡 Kéo thanh trượt sao cho khung khớp vị trí thực 
 
 # 1. Cấu hình POS (Green)
 pos_x1 = st.sidebar.slider("POS X1", 0, 1280, 206, key="p_x1")
-pos_y1 = st.sidebar.slider("POS Y1", 0, 720, 180, key="p_y1")
+pos_y1 = st.sidebar.slider("POS Y1", 0, 720, 424, key="p_y1")
 pos_x2 = st.sidebar.slider("POS X2", 0, 1280, 370, key="p_x2")
-pos_y2 = st.sidebar.slider("POS Y2", 0, 720, 292, key="p_y2")
+pos_y2 = st.sidebar.slider("POS Y2", 0, 720, 624, key="p_y2")
 pos_roi = [pos_x1, pos_y1, pos_x2, pos_y2]
 
 # 2. Cấu hình Két Tiền (Red/Dynamic)
 drawer_x1 = st.sidebar.slider("DRAWER X1", 0, 1280, 164, key="d_x1")
-drawer_y1 = st.sidebar.slider("DRAWER Y1", 0, 720, 155, key="d_y1")
-drawer_x2 = st.sidebar.slider("DRAWER X2", 0, 1280, 306, key="d_x2")
-drawer_y2 = st.sidebar.slider("DRAWER Y2", 0, 720, 200, key="d_y2")
+drawer_y1 = st.sidebar.slider("DRAWER Y1", 0, 720, 352, key="d_y1")
+drawer_x2 = st.sidebar.slider("DRAWER X2", 0, 1280, 391, key="d_x2")
+drawer_y2 = st.sidebar.slider("DRAWER Y2", 0, 720, 444, key="d_y2")
 drawer_roi = [drawer_x1, drawer_y1, drawer_x2, drawer_y2]
 
 # --- INIT SYSTEM ---
@@ -123,7 +123,7 @@ detector.drawer_roi = drawer_roi
 
 # --- MAIN APP LOOP ---
 video_source = st.file_uploader("Tải video giám sát (Test)", type=['mp4', 'mov', 'avi'])
-default_video_path = "./samples_demo/No_pos_interact/test.mp4"
+default_video_path = "./samples_demo/good_procedure/test.mp4"
 
 # Ưu tiên dùng video upload, nếu không có thì dùng video mặc định
 final_video_path = None
@@ -157,7 +157,7 @@ if final_video_path:
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret: break
-        frame = cv2.resize(frame, (640, 640))
+        # frame = cv2.resize(frame, (640, 640))
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame_timestamp_ms = int(1000 * frame_count / fps)
         frame_count += 1
@@ -221,7 +221,7 @@ if final_video_path:
             st_state_info.info(f"Last Event: {event}")
 
         st_frame.image(frame_rgb, channels="RGB")
-        time.sleep(0.02)  # Giảm tải CPU
+        # time.sleep(0.02)  # Giảm tải CPU
 
     cap.release()
 else:

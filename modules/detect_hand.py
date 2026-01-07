@@ -328,7 +328,6 @@ class FraudDetector:
                     event = "✅ Transaction Ended (No money access detected)"
                     self.last_transaction_end_time = current_time
                     self.close_confirm_counter = 0
-                    self.update_reference_bg(frame)  # Cập nhật ảnh mẫu mới khi két đóng
             else:
                 self.close_confirm_counter = 0
                 # Kiểm tra thời gian mở két quá lâu
