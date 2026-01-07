@@ -83,23 +83,23 @@ st.title("🛡️ AI Fraud Detection: Hybrid (Motion Gate + FSM)")
 # --- CẤU HÌNH SIDEBAR ---
 st.sidebar.header("1. Cấu hình Model")
 model_hand_path = st.sidebar.text_input("Đường dẫn Model Tay (.task)", "./models/hand_landmarker.task")
-model_drawer_path = st.sidebar.text_input("Đường dẫn Model Két (.tflite)", "./models/pos_classification.tflite")
+model_drawer_path = st.sidebar.text_input("Đường dẫn Model Két (.tflite)", "./models/demo_sample/model_unquant.tflite")
 
 st.sidebar.header("2. Cấu hình Vùng (ROI)")
 st.sidebar.info("💡 Kéo thanh trượt sao cho khung khớp vị trí thực tế.")
 
 # 1. Cấu hình POS (Green)
-pos_x1 = st.sidebar.slider("POS X1", 0, 1280, 640, key="p_x1")
-pos_y1 = st.sidebar.slider("POS Y1", 0, 720, 284, key="p_y1")
-pos_x2 = st.sidebar.slider("POS X2", 0, 1280, 754, key="p_x2")
-pos_y2 = st.sidebar.slider("POS Y2", 0, 720, 500, key="p_y2")
+pos_x1 = st.sidebar.slider("POS X1", 0, 1280, 206, key="p_x1")
+pos_y1 = st.sidebar.slider("POS Y1", 0, 720, 180, key="p_y1")
+pos_x2 = st.sidebar.slider("POS X2", 0, 1280, 370, key="p_x2")
+pos_y2 = st.sidebar.slider("POS Y2", 0, 720, 292, key="p_y2")
 pos_roi = [pos_x1, pos_y1, pos_x2, pos_y2]
 
 # 2. Cấu hình Két Tiền (Red/Dynamic)
-drawer_x1 = st.sidebar.slider("DRAWER X1", 0, 1280, 320, key="d_x1")
-drawer_y1 = st.sidebar.slider("DRAWER Y1", 0, 720, 516, key="d_y1")
-drawer_x2 = st.sidebar.slider("DRAWER X2", 0, 1280, 548, key="d_x2")
-drawer_y2 = st.sidebar.slider("DRAWER Y2", 0, 720, 628, key="d_y2")
+drawer_x1 = st.sidebar.slider("DRAWER X1", 0, 1280, 164, key="d_x1")
+drawer_y1 = st.sidebar.slider("DRAWER Y1", 0, 720, 150, key="d_y1")
+drawer_x2 = st.sidebar.slider("DRAWER X2", 0, 1280, 306, key="d_x2")
+drawer_y2 = st.sidebar.slider("DRAWER Y2", 0, 720, 200, key="d_y2")
 drawer_roi = [drawer_x1, drawer_y1, drawer_x2, drawer_y2]
 
 # --- INIT SYSTEM ---
@@ -123,7 +123,7 @@ detector.drawer_roi = drawer_roi
 
 # --- MAIN APP LOOP ---
 video_source = st.file_uploader("Tải video giám sát (Test)", type=['mp4', 'mov', 'avi'])
-default_video_path = "./samples/temp_sample_2.mp4"
+default_video_path = "./samples_demo/good_procedure/test.mp4"
 
 # Ưu tiên dùng video upload, nếu không có thì dùng video mặc định
 final_video_path = None
@@ -157,7 +157,7 @@ if final_video_path:
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret: break
-        
+        frame = cv2.resize(frame, (640, 640))
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame_timestamp_ms = int(1000 * frame_count / fps)
         frame_count += 1
@@ -187,7 +187,7 @@ if final_video_path:
             rec_color = (255, 0, 0) if recorder.event_type == "ALARM" else (0, 165, 255)
             cv2.circle(frame_rgb, (30, 30), 10, rec_color, -1)
             cv2.putText(frame_rgb, f"REC [{recorder.event_type}]", (50, 35), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, rec_color, 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, rec_color, 1)
         
         # --- HIỂN THỊ TRẠNG THÁI NGỦ/THỨC ---
         if detector.is_sleeping:
@@ -197,7 +197,7 @@ if final_video_path:
             cv2.rectangle(overlay, (0,0), (400, 60), (0,0,0), -1)
             cv2.addWeighted(overlay, 0.5, frame_rgb, 0.5, 0, frame_rgb)
             cv2.putText(frame_rgb, "💤 AI SLEEPING (NO MOTION)", (10, 40), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         else:
             st_mode.warning("⚡ MODE: ACTIVE (AI Processing)")
             # Chỉ vẽ tay khi có kết quả detect (không phải None)
@@ -211,7 +211,7 @@ if final_video_path:
 
         # --- VẼ GIAO DIỆN ROI ---
         cv2.rectangle(frame_rgb, (pos_roi[0], pos_roi[1]), (pos_roi[2], pos_roi[3]), (0, 255, 0), 2)
-        cv2.putText(frame_rgb, "POS AREA", (pos_roi[0], pos_roi[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.putText(frame_rgb, "POS AREA", (pos_roi[0], pos_roi[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
 
         if drawer_status == "OPEN":
             box_color = (255, 0, 0)
@@ -223,11 +223,11 @@ if final_video_path:
             status_lbl = "Drawer Closed"
             
         cv2.rectangle(frame_rgb, (drawer_roi[0], drawer_roi[1]), (drawer_roi[2], drawer_roi[3]), box_color, box_thick)
-        cv2.putText(frame_rgb, status_lbl, (drawer_roi[0], drawer_roi[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
+        cv2.putText(frame_rgb, status_lbl, (drawer_roi[0], drawer_roi[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 1)
 
         # Hiển thị State
         state_color = (255, 0, 0) if detector.state == "SUSPICIOUS" else (0, 255, 0)
-        cv2.putText(frame_rgb, f"STATE: {detector.state}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, state_color, 2)
+        cv2.putText(frame_rgb, f"STATE: {detector.state}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, state_color, 1)
         
         # --- UPDATE LOGS ---
         if event:

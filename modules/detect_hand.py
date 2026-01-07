@@ -47,16 +47,16 @@ class FraudDetector:
         # 2. Logic Variables (FSM)
         self.state = "IDLE"
         self.last_pos_time = 0
-        self.pos_timeout = 30.0     # Thời gian chờ từ lúc bấm POS đến lúc mở két
+        self.pos_timeout = 20.0     # Thời gian chờ từ lúc bấm POS đến lúc mở két
         self.drawer_buffer = deque(maxlen=5) 
         self.frame_count = 0 
         self.last_drawer_status = "CLOSED"
         self.close_confirm_counter = 0 
-        self.CLOSE_THRESHOLD = 30
+        self.CLOSE_THRESHOLD = 20
 
         # Variables cho Dwell Time & Refund
         self.pos_enter_time = None     # Thời điểm tay bắt đầu vào vùng POS  
-        self.POS_DWELL_THRESHOLD = 0.5   # Phải giữ tay 0.5s mới tính là bấm (chống lướt qua)
+        self.POS_DWELL_THRESHOLD = 1.0   # Phải giữ tay 1s mới tính là bấm (chống lướt qua)
         self.is_pressing_pos = False     # Trạng thái xác nhận "Đang bấm thật"
         
         # --- VARIABLES CHO QUY TRÌNH NGƯỢC (REFUND) ---
@@ -68,12 +68,13 @@ class FraudDetector:
         # history=500: Học nền trong 500 frame
         # varThreshold=50: Độ nhạy (cao hơn thì ít nhiễu hơn)
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-            history=500, varThreshold=50, detectShadows=False
+            history=300, varThreshold=50, detectShadows=False
         )
         
-        self.MOTION_THRESHOLD = 0.05 # 5% diện tích vùng ROI thay đổi là có chuyển động
+        self.MOTION_THRESHOLD = 0.005 # 0.5% diện tích vùng ROI thay đổi là có chuyển động
         self.ai_cooldown = 0         # Bộ đếm lùi (frames) để giữ AI chạy thêm
         self.is_sleeping = False     # Trạng thái hiện tại của hệ thống
+        self.EDGE_THRESHOLD = 0.05  # Ngưỡng mật độ biên để xác định két mở
     
     def _init_mediapipe(self):
         base_options = python.BaseOptions(model_asset_path=self.hand_model_path)
@@ -86,7 +87,7 @@ class FraudDetector:
         self.hand_detector = vision.HandLandmarker.create_from_options(options)
         
     def reset(self):
-        """[NEW] Hàm reset trạng thái khi video chạy lại từ đầu"""
+        """Hàm reset trạng thái khi video chạy lại từ đầu"""
         # 1. Reset Logic Variables
         self.state = "IDLE"
         self.frame_count = 0
@@ -95,7 +96,7 @@ class FraudDetector:
         self.is_pressing_pos = False
         self.ai_cooldown = 0
         
-        # 2. Reset MediaPipe (QUAN TRỌNG: Fix lỗi timestamp)
+        # 2. Reset MediaPipe
         if hasattr(self, 'hand_detector'):
             self.hand_detector.close() # Đóng instance cũ
         self._init_mediapipe()         # Tạo instance mới
@@ -103,6 +104,30 @@ class FraudDetector:
     def is_inside_roi(self, x, y, roi):
         x1, y1, x2, y2 = roi
         return x1 <= x <= x2 and y1 <= y <= y2
+    
+    def calculate_edge_density(self, frame, roi):
+        x1, y1, x2, y2 = roi
+        h, w, _ = frame.shape
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        
+        # Cắt vùng ảnh ROI
+        roi_img = frame[y1:y2, x1:x2]
+        if roi_img.size == 0: return 0.0
+
+        # 1. Chuyển sang ảnh xám
+        gray = cv2.cvtColor(roi_img, cv2.COLOR_BGR2GRAY)
+        
+        # 2. Làm mờ nhẹ để loại bỏ nhiễu (sàn nhà bẩn, hạt sạn)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+        # 3. Dùng Canny để tìm biên
+        # Ngưỡng 50, 150 là tiêu chuẩn, có thể chỉnh nếu cần
+        edges = cv2.Canny(blurred, 50, 150)
+        
+        # 4. Tính mật độ: Số điểm trắng / Tổng số điểm ảnh
+        density = np.count_nonzero(edges) / edges.size
+        return density
 
     # --- HÀM KIỂM TRA CHUYỂN ĐỘNG (TẦNG 1) ---
     def _check_motion(self, frame_gray):
@@ -113,7 +138,7 @@ class FraudDetector:
         mask = self.bg_subtractor.apply(frame_gray)
         
         # 2. Lọc nhiễu (Morphology) - Loại bỏ hạt sạn, bụi
-        kernel = np.ones((5, 5), np.uint8)
+        kernel = np.ones((3, 3), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         
         # 3. Kiểm tra chuyển động tại các vùng quan trọng
@@ -156,11 +181,22 @@ class FraudDetector:
         output_data = self.interpreter.get_tensor(self.output_details[0]['index'])
         
         # Index 0 = OPEN, Index 1 = CLOSED
-        is_open = output_data[0][0] > output_data[0][1]
+        open_score = output_data[0][0]
+        
+        # Kiểm tra mật độ biên để tăng độ chính xác
+        edge_density = self.calculate_edge_density(frame, self.drawer_roi)
+
+        if open_score > 0.5 or (open_score > 0.2 and edge_density > self.EDGE_THRESHOLD):
+            is_open = True
+        else:
+            is_open = False
 
         # Logic Buffer để làm mượt kết quả
         self.drawer_buffer.append(is_open)
-        if sum(self.drawer_buffer) >= (self.drawer_buffer.maxlen * 0.8):
+        print(f'DEBUG BUFFER: {sum(self.drawer_buffer) >= (self.drawer_buffer.maxlen * 0.4)}')
+        
+         # Quyết định cuối cùng dựa trên buffer
+        if sum(self.drawer_buffer) >= (self.drawer_buffer.maxlen * 0.4):
             return "OPEN"
         else:
             return "CLOSED"
@@ -300,8 +336,9 @@ class FraudDetector:
         elif self.ai_cooldown > 0:
             self.ai_cooldown -= 1
             
-        # QUYẾT ĐỊNH: Nếu Hết quán tính + Đang rảnh (IDLE) -> NGỦ ĐÔNG
-        if self.ai_cooldown == 0 and self.state == "IDLE":
+        # QUYẾT ĐỊNH: Nếu Hết quán tính + Đang rảnh (IDLE) + Drawer CLOSED -> NGỦ ĐÔNG
+        is_drawer_safe_to_sleep = (self.last_drawer_status == "CLOSED")
+        if self.ai_cooldown == 0 and self.state == "IDLE" and is_drawer_safe_to_sleep:
             self.is_sleeping = True
             # TRẢ VỀ None: Báo hiệu cho app.py biết là AI đang ngủ
             return None, None, self.last_drawer_status

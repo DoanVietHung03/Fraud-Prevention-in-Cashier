@@ -5,3 +5,4 @@ datasets/
 evidence_clips/
 samples_demo/
 *.pyc
+extract_frame.py
