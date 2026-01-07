@@ -71,7 +71,7 @@ class FraudDetector:
         self.last_transaction_end_time = 0 
         self.POST_TRANSACTION_COOLDOWN = 4.0
 
-        # --- TỐI ƯU: ĐỊNH NGHĨA HẰNG SỐ MÀU SẮC 1 LẦN ---
+        # --- ĐỊNH NGHĨA HẰNG SỐ MÀU SẮC ---
         self.lower_red1 = np.array([0, 50, 50])
         self.upper_red1 = np.array([8, 255, 255])
         self.lower_red2 = np.array([160, 60, 50])
@@ -158,7 +158,6 @@ class FraudDetector:
         
         is_open = False
 
-        # --- OPTIMIZATION: SHORT-CIRCUIT EVALUATION ---
         # Chỉ chạy thuật toán xử lý ảnh nặng nếu TFLite không chắc chắn
         # Ngưỡng dưới 0.1: Chắc chắn Đóng. Ngưỡng trên 0.6: Chắc chắn Mở.
         # Khoảng 0.1 - 0.6: Cần kiểm tra thêm bằng Edge/Color
@@ -343,8 +342,7 @@ class FraudDetector:
 
         if detection_result.hand_landmarks:
             for landmarks in detection_result.hand_landmarks:
-                # Chỉ lấy đầu ngón trỏ (8) và cổ tay (0) để check nhanh
-                # (Bỏ bớt các điểm khác để loop nhanh hơn)
+                # Chỉ lấy đầu ngón trỏ (8) và cổ tay (0) để check nhanh hơn
                 points_to_check = [landmarks[8], landmarks[0]]
                 
                 # Check POS

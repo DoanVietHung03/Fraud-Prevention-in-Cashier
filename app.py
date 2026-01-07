@@ -11,7 +11,7 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 
 from modules.detect_hand import FraudDetector
 
-# --- 1. SETUP & UTILS (Giữ nguyên) ---
+# --- 1. SETUP & UTILS ---
 class EvidenceRecorder:
     def __init__(self, output_folder="evidence_clips", fps=30, buffer_seconds=30):
         self.output_folder = output_folder
@@ -176,7 +176,7 @@ if setup_mode:
 
 st.sidebar.divider()
 
-# --- SIDEBAR: HIỂN THỊ KẾT QUẢ (KHÔNG DÙNG SLIDER NỮA) ---
+# --- SIDEBAR: HIỂN THỊ KẾT QUẢ ---
 st.sidebar.subheader("📍 Tọa độ hiện tại")
 st.sidebar.markdown(f"""
 **🟩 Vùng POS:**
