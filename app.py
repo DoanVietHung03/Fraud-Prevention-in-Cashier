@@ -123,7 +123,7 @@ detector.drawer_roi = drawer_roi
 
 # --- MAIN APP LOOP ---
 video_source = st.file_uploader("Tải video giám sát (Test)", type=['mp4', 'mov', 'avi'])
-default_video_path = "./samples_demo/No_pos_interact/test.mp4"
+default_video_path = "./samples_demo/good_procedure/test.mp4"
 
 # Ưu tiên dùng video upload, nếu không có thì dùng video mặc định
 final_video_path = None
@@ -180,14 +180,6 @@ if final_video_path:
                 # Ghi ngay, gán nhãn WARNING, ghi thêm 30s tương lai (để chờ xem có nhập POS không)
                 if recorder.trigger_save(event_type="WARNING", duration_future=30):
                     st.toast("⚠️ Cảnh báo quy trình! Đang lưu clip đối soát.", icon="📹")
-
-        # --- HIỂN THỊ TRẠNG THÁI REC ---
-        if recorder.is_recording:
-            # Đổi màu icon REC dựa theo loại sự kiện
-            rec_color = (255, 0, 0) if recorder.event_type == "ALARM" else (0, 165, 255)
-            cv2.circle(frame_rgb, (30, 30), 10, rec_color, -1)
-            cv2.putText(frame_rgb, f"REC [{recorder.event_type}]", (50, 35), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, rec_color, 1)
         
         # --- HIỂN THỊ TRẠNG THÁI NGỦ/THỨC ---
         if detector.is_sleeping:
@@ -229,7 +221,7 @@ if final_video_path:
             st_state_info.info(f"Last Event: {event}")
 
         st_frame.image(frame_rgb, channels="RGB")
-        time.sleep(0.02)  # Giảm tải CPU
+        time.sleep(0.03)  # Giảm tải CPU
 
     cap.release()
 else:

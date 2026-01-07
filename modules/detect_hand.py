@@ -52,7 +52,7 @@ class FraudDetector:
         self.frame_count = 0 
         self.last_drawer_status = "CLOSED"
         self.close_confirm_counter = 0 
-        self.CLOSE_THRESHOLD = 60  # Số frame liên tiếp két đóng để xác nhận kết đóng
+        self.CLOSE_THRESHOLD = 50  # Số frame liên tiếp để xác nhận két đóng
 
         # Variables cho Dwell Time & Refund
         self.pos_enter_time = None     # Thời điểm tay bắt đầu vào vùng POS  
@@ -64,13 +64,14 @@ class FraudDetector:
         # history=500: Học nền trong 500 frame
         # varThreshold=50: Độ nhạy (cao hơn thì ít nhiễu hơn)
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-            history=500, varThreshold=50, detectShadows=False
+            history=500, varThreshold=20, detectShadows=False
         )
         
         self.MOTION_THRESHOLD = 0.05 # 5% diện tích vùng ROI thay đổi là có chuyển động
         self.ai_cooldown = 0         # Bộ đếm lùi (frames) để giữ AI chạy thêm
         self.is_sleeping = False     # Trạng thái hiện tại của hệ thống
         self.EDGE_THRESHOLD = 0.03  # Ngưỡng mật độ biên để xác định két mở
+        self.COLOR_THRESHOLD = 0.1  # Ngưỡng tỷ lệ màu hồng trong két để xác định két mở
         
         self.last_transaction_end_time = 0 # Thời điểm kết thúc giao dịch gần nhất
         self.POST_TRANSACTION_COOLDOWN = 5.0 # Giây (Thời gian "nguội" sau khi đóng két)
@@ -127,6 +128,38 @@ class FraudDetector:
         # 4. Tính mật độ: Số điểm trắng / Tổng số điểm ảnh
         density = np.count_nonzero(edges) / edges.size
         return density
+    
+    def calculate_color_HSV(self, frame, roi):
+        x1, y1, x2, y2 = roi
+        h, w, _ = frame.shape
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        
+        # Cắt vùng ảnh ROI
+        roi_img = frame[y1:y2, x1:x2]
+        if roi_img.size == 0: return 0.0
+        
+        # Két màu Hồng/Đỏ -> Chuyển sang hệ màu HSV để lọc màu tốt hơn RGB
+        hsv = cv2.cvtColor(roi_img, cv2.COLOR_BGR2HSV)
+
+        # Định nghĩa dải màu Đỏ/Hồng (Red/Pink) trong HSV
+        # Dải 1: Đỏ pha cam (0-10)
+        lower_red1 = np.array([0, 70, 50])
+        upper_red1 = np.array([10, 255, 255])
+        
+        # Dải 2: Đỏ pha tím/Hồng (160-180) <- Két của bạn khả năng cao rơi vào đây
+        lower_red2 = np.array([160, 70, 50])
+        upper_red2 = np.array([180, 255, 255])
+        
+        # Tạo mask cho cả 2 dải màu
+        mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+        mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+        mask_pink = mask1 | mask2 # Gộp lại
+        
+        # Tính tỷ lệ diện tích màu hồng
+        pink_ratio = cv2.countNonZero(mask_pink) / mask_pink.size
+        
+        return pink_ratio
 
     # --- HÀM KIỂM TRA CHUYỂN ĐỘNG (TẦNG 1) ---
     def _check_motion(self, frame_gray):
@@ -184,8 +217,10 @@ class FraudDetector:
         
         # Kiểm tra mật độ biên để tăng độ chính xác
         edge_density = self.calculate_edge_density(frame, self.drawer_roi)
+        
+        pink_ratio = self.calculate_color_HSV(frame, self.drawer_roi)
 
-        if open_score > 0.5 or (open_score > 0.2 and edge_density > self.EDGE_THRESHOLD):
+        if open_score > 0.4 or (open_score > 0.1 and edge_density > self.EDGE_THRESHOLD and pink_ratio > self.COLOR_THRESHOLD):
             is_open = True
         else:
             is_open = False
@@ -195,7 +230,7 @@ class FraudDetector:
         # print(f'DEBUG BUFFER: {sum(self.drawer_buffer) >= (self.drawer_buffer.maxlen * 0.4)}')
         
         # Quyết định cuối cùng dựa trên buffer
-        if sum(self.drawer_buffer) >= (self.drawer_buffer.maxlen * 0.4):
+        if sum(self.drawer_buffer) >= (self.drawer_buffer.maxlen * 0.3):
             return "OPEN"
         else:
             return "CLOSED"
@@ -322,7 +357,7 @@ class FraudDetector:
         # Nếu có chuyển động pixel -> Reset cooldown về 60 (2 giây)
         # Nếu không -> Giảm dần
         if has_motion:
-            self.ai_cooldown = 60
+            self.ai_cooldown = 120
         elif self.ai_cooldown > 0:
             self.ai_cooldown -= 1
             
