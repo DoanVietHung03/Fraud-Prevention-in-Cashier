@@ -70,11 +70,14 @@ class FraudDetector:
         self.MOTION_THRESHOLD = 0.05 # 5% diện tích vùng ROI thay đổi là có chuyển động
         self.ai_cooldown = 0         # Bộ đếm lùi (frames) để giữ AI chạy thêm
         self.is_sleeping = False     # Trạng thái hiện tại của hệ thống
-        self.EDGE_THRESHOLD = 0.03  # Ngưỡng mật độ biên để xác định két mở
-        self.COLOR_THRESHOLD = 0.1  # Ngưỡng tỷ lệ màu hồng trong két để xác định két mở
+        self.EDGE_THRESHOLD = 0.05  # Ngưỡng mật độ biên để xác định két mở
+        self.COLOR_THRESHOLD = 0.3  # Ngưỡng tỷ lệ màu hồng trong két để xác định két mở
+
+        self.DRAWER_OPEN_MAX_TIME = 20.0 # 20 giây tối đa cho phép mở két
+        self.drawer_open_start_time = 0  # Lưu thời điểm bắt đầu mở két
         
         self.last_transaction_end_time = 0 # Thời điểm kết thúc giao dịch gần nhất
-        self.POST_TRANSACTION_COOLDOWN = 5.0 # Giây (Thời gian "nguội" sau khi đóng két)
+        self.POST_TRANSACTION_COOLDOWN = 4.0 # Giây (Thời gian "nguội" sau khi đóng két)
     
     def _init_mediapipe(self):
         base_options = python.BaseOptions(model_asset_path=self.hand_model_path)
@@ -144,11 +147,11 @@ class FraudDetector:
 
         # Định nghĩa dải màu Đỏ/Hồng (Red/Pink) trong HSV
         # Dải 1: Đỏ pha cam (0-10)
-        lower_red1 = np.array([0, 70, 50])
-        upper_red1 = np.array([10, 255, 255])
+        lower_red1 = np.array([0, 50, 50])
+        upper_red1 = np.array([8, 255, 255])
         
-        # Dải 2: Đỏ pha tím/Hồng (160-180) <- Két của bạn khả năng cao rơi vào đây
-        lower_red2 = np.array([160, 70, 50])
+        # Dải 2: Đỏ pha tím/Hồng (160-180) 
+        lower_red2 = np.array([160, 60, 50])
         upper_red2 = np.array([180, 255, 255])
         
         # Tạo mask cho cả 2 dải màu
@@ -281,6 +284,16 @@ class FraudDetector:
         # --- TRẠNG THÁI: IDLE (Chờ khách) ---
         if self.state == "IDLE":
             if is_valid_pos_action:
+                # Tính thời gian từ lúc đóng két lần trước đến lần chạm POS này
+                # Nếu < 10 giây mà đã bấm giao dịch mới -> Cảnh báo nhẹ (Warning)
+                # Để người quản lý kiểm tra lại log xem có phải Hủy bill không
+                time_since_last_txn = current_time - self.last_transaction_end_time
+                if time_since_last_txn < 10.0 and self.last_transaction_end_time > 0:
+                    print(f"⚠️ RAPID TRANSACTION: Only {time_since_last_txn:.1f}s since last close")
+                    event = "⚠️ STEP 1: Staff Inputting Order (Fast Repetition - Check POS)"
+                else:
+                    event = "1️⃣ STEP 1: Staff Inputting Order (Verified)"
+                     
                 self.state = "POS_INTERACTED"
                 self.last_pos_time = current_time
                 event = "1️⃣ STEP 1: Staff Inputting Order (Verified)"
@@ -299,6 +312,7 @@ class FraudDetector:
                 if current_time - self.last_pos_time <= self.pos_timeout:
                     self.state = "DRAWER_OPENED"
                     event = "2️⃣ STEP 2: Drawer Opened (Valid)"
+                    self.drawer_open_start_time = current_time
                 else:
                     self.state = "SUSPICIOUS"
                     event = "🚨 ALARM: Drawer Opened too late (Timeout)"
@@ -317,7 +331,11 @@ class FraudDetector:
                     self.close_confirm_counter = 0
             else:
                 self.close_confirm_counter = 0
-                if hand_in_drawer:
+                # Kiểm tra thời gian mở két quá lâu
+                if (current_time - self.drawer_open_start_time) > self.DRAWER_OPEN_MAX_TIME:
+                    self.state = "SUSPICIOUS"
+                    event = "🚨 ALARM: Drawer Left Open TOO LONG (> 60s)!"
+                elif hand_in_drawer:
                     self.state = "MONEY_ACCESSED"
                     event = "3️⃣ STEP 3: Money Access / Change Given"
 
@@ -328,9 +346,13 @@ class FraudDetector:
                 if self.close_confirm_counter > self.CLOSE_THRESHOLD:
                     self.state = "IDLE"
                     event = "✅ STEP 4: Cycle Complete - Drawer Closed"
+                    self.last_transaction_end_time = current_time
                     self.close_confirm_counter = 0
             else:
                 self.close_confirm_counter = 0
+                if (current_time - self.drawer_open_start_time) > self.DRAWER_OPEN_MAX_TIME:
+                    self.state = "SUSPICIOUS"
+                    event = "🚨 ALARM: Drawer Left Open TOO LONG (> 60s)!"
 
         # --- TRẠNG THÁI: SUSPICIOUS (Cảnh báo) ---
         elif self.state == "SUSPICIOUS":

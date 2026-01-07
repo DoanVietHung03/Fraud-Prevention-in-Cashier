@@ -123,7 +123,7 @@ detector.drawer_roi = drawer_roi
 
 # --- MAIN APP LOOP ---
 video_source = st.file_uploader("Tải video giám sát (Test)", type=['mp4', 'mov', 'avi'])
-default_video_path = "./samples_demo/good_procedure/test.mp4"
+default_video_path = "./samples_demo/open_drawer_when_refund/test.mp4"
 
 # Ưu tiên dùng video upload, nếu không có thì dùng video mặc định
 final_video_path = None
@@ -221,7 +221,7 @@ if final_video_path:
             st_state_info.info(f"Last Event: {event}")
 
         st_frame.image(frame_rgb, channels="RGB")
-        time.sleep(0.03)  # Giảm tải CPU
+        time.sleep(0.02)  # Giảm tải CPU
 
     cap.release()
 else:
