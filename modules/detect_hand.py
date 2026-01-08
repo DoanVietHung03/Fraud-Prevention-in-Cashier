@@ -38,7 +38,7 @@ class FraudDetector:
             base_options=base_options,
             running_mode=vision.RunningMode.VIDEO,
             num_hands=2,
-            min_hand_detection_confidence=0.5
+            min_hand_detection_confidence=0.3
         )
         self.hand_detector = vision.HandLandmarker.create_from_options(options)
 
@@ -53,7 +53,7 @@ class FraudDetector:
         self.CLOSE_THRESHOLD = 50 
 
         self.pos_enter_time = None     
-        self.POS_DWELL_THRESHOLD = 3.0   
+        self.POS_DWELL_THRESHOLD = 2.0 
         self.is_pressing_pos = False     
 
         # 3. Motion & Thresholds
@@ -66,10 +66,10 @@ class FraudDetector:
         self.EDGE_THRESHOLD = 0.05
         self.COLOR_THRESHOLD = 0.3
         
-        self.DRAWER_OPEN_MAX_TIME = 20.0 
+        self.DRAWER_OPEN_MAX_TIME = 15.0 
         self.drawer_open_start_time = 0  
         self.last_transaction_end_time = 0 
-        self.POST_TRANSACTION_COOLDOWN = 4.0
+        self.POST_TRANSACTION_COOLDOWN = 3.0
 
         # --- ĐỊNH NGHĨA HẰNG SỐ MÀU SẮC ---
         self.lower_red1 = np.array([0, 50, 50])
@@ -95,6 +95,13 @@ class FraudDetector:
         
         # Flag theo dõi có bị che chắn trong chu kỳ hiện tại không
         self.was_blocked_during_cycle = False
+        
+        # Flag nghi ngờ chu kỳ gian lận (hủy bill)
+        self.is_suspect_cycle = False
+        
+        # Thời gian tay cuối cùng trong két (dùng cho logic nhớ tay)
+        self.last_hand_in_drawer_time = 0 
+        self.HAND_MEMORY_TIMEOUT = 2.0  # Giây (Thời gian miễn trừ sau khi rút tay)
 
     def reset(self):
         """Reset trạng thái logic, KHÔNG reload model để tránh lag"""
@@ -107,6 +114,7 @@ class FraudDetector:
         self.last_transaction_end_time = 0
         self.drawer_open_start_time = 0
         self.close_confirm_counter = 0
+        self.is_suspect_cycle = False
         
     def _filter_duplicate_event(self, raw_event):
         """
@@ -312,8 +320,11 @@ class FraudDetector:
             if is_valid_pos_action:
                 time_since_last_txn = current_time - self.last_transaction_end_time
                 if time_since_last_txn < 10.0 and self.last_transaction_end_time > 0:
-                    event = "⚠️ STEP 1: Staff Inputting Order (Fast Repetition)"
+                    self.is_suspect_cycle = True
+                    event = "⚠️ WARNING: Staff Inputting Order (Fast Repetition)"
+                    
                 else:
+                    self.is_suspect_cycle = False
                     event = "1️⃣ STEP 1: Staff Inputting Order (Verified)"
                      
                 self.state = "POS_INTERACTED"
@@ -333,6 +344,12 @@ class FraudDetector:
                     self.state = "DRAWER_OPENED"
                     event = "2️⃣ STEP 2: Drawer Opened (Valid)"
                     self.drawer_open_start_time = current_time
+                    
+                    if self.is_suspect_cycle:
+                        # Nếu là chu kỳ lặp lại nhanh MÀ lại mở két -> RỦI RO CAO
+                        event = "🚨 ALARM: Suspicious Transaction (Fast Re-entry + Open)"
+                    else:
+                        event = "2️⃣ STEP 2: Drawer Opened (Valid)"
                 else:
                     self.state = "SUSPICIOUS"
                     event = "🚨 ALARM: Drawer Opened too late (Timeout)"
@@ -391,6 +408,10 @@ class FraudDetector:
             elif drawer_status == "CLOSED":
                 self.state = "IDLE"
 
+        if self.is_suspect_cycle and self.was_blocked_during_cycle:
+            # Nếu đang trong chu kỳ lặp nhanh MÀ có dấu hiệu bị che
+            event = "🚨 ALARM: HIGH RISK - Fast Repetition with BLOCKED VIEW!"
+    
         return event
 
     def process_frame(self, frame, timestamp_ms):
@@ -478,10 +499,17 @@ class FraudDetector:
                     if any(self.is_inside_roi(pt.x * w, pt.y * h, self.drawer_roi) for pt in points_to_check):
                         hand_in_drawer = True
         
+        # Cập nhật thời gian tay cuối cùng trong két    
+        current_time_sec = time.time()
+        if hand_in_drawer:
+            self.last_hand_in_drawer_time = current_time_sec
+        
         # --- TẦNG 4: CHECK CHE KHUẤT KÉT (Occlusion) ---
         # Chỉ check khi Két Đóng + Không có tay (để tránh báo giả khi nhân viên đang thao tác)
         raw_blocking_msg = None
-        if drawer_status == "CLOSED" and not hand_in_drawer:
+        time_since_hand_gone = current_time_sec - self.last_hand_in_drawer_time
+        
+        if drawer_status == "CLOSED" and not hand_in_drawer and (time_since_hand_gone > self.HAND_MEMORY_TIMEOUT):
             is_blocked = self.check_drawer_blocking(frame, hand_in_drawer)
             if is_blocked:
                 self.block_counter += 1
