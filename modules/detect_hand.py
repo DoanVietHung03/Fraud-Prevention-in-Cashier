@@ -321,7 +321,7 @@ class FraudDetector:
                 time_since_last_txn = current_time - self.last_transaction_end_time
                 if time_since_last_txn < 10.0 and self.last_transaction_end_time > 0:
                     self.is_suspect_cycle = True
-                    event = "⚠️ WARNING: Staff Inputting Order (Fast Repetition)"
+                    event = "⚠️ WARNING: Fast Re-entry (Possible Void/Cancel Bill)"
                     
                 else:
                     self.is_suspect_cycle = False
@@ -347,7 +347,7 @@ class FraudDetector:
                     
                     if self.is_suspect_cycle:
                         # Nếu là chu kỳ lặp lại nhanh MÀ lại mở két -> RỦI RO CAO
-                        event = "🚨 ALARM: Suspicious Transaction (Fast Re-entry + Open)"
+                        event = "🚨 ALARM: Suspicious - Drawer Re-opened too quickly (Theft Risk!)"
                     else:
                         event = "2️⃣ STEP 2: Drawer Opened (Valid)"
                 else:
