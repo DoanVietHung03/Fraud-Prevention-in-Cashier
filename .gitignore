@@ -9,3 +9,6 @@ extract_frame.py
 fake_log_pos.py
 script_test_pos.py
 *.csv
+*.json
+*.mp4
+*.avi
