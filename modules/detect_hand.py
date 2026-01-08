@@ -66,10 +66,10 @@ class FraudDetector:
         self.EDGE_THRESHOLD = 0.05
         self.COLOR_THRESHOLD = 0.3
         
-        self.DRAWER_OPEN_MAX_TIME = 15.0 
+        self.DRAWER_OPEN_MAX_TIME = 20.0 
         self.drawer_open_start_time = 0  
         self.last_transaction_end_time = 0 
-        self.POST_TRANSACTION_COOLDOWN = 3.0
+        self.POST_TRANSACTION_COOLDOWN = 5.0
 
         # --- ĐỊNH NGHĨA HẰNG SỐ MÀU SẮC ---
         self.lower_red1 = np.array([0, 50, 50])

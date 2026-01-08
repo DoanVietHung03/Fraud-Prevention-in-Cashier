@@ -166,7 +166,8 @@ st.title("🛡️ AI Fraud Detection: Click-to-Setup")
 defaults = {
     "p_x1": 206, "p_y1": 424, "p_x2": 370, "p_y2": 624,
     "d_x1": 164, "d_y1": 352, "d_x2": 391, "d_y2": 444,
-    "last_processed_click": None 
+    "last_processed_click": None,
+    "activity_logs": []
 }
 for key, val in defaults.items():
     if key not in st.session_state:
@@ -174,11 +175,11 @@ for key, val in defaults.items():
         
 # --- INIT TRANSACTION MONITOR ---
 if 'monitor' not in st.session_state:
-    st.session_state.monitor = TransactionMonitor(match_window=10) # 10 giây để đối chiếu hệ thống bằng nhau
+    st.session_state.monitor = TransactionMonitor(match_window=15) # 15 giây để đối chiếu hệ thống bằng nhau
 
 # --- SIDEBAR: CẤU HÌNH ---
 video_source = st.file_uploader("Tải video giám sát", type=['mp4', 'mov', 'avi'])
-default_video_path = "./samples_demo/cancel_bill/test.mp4"
+default_video_path = "./samples_demo/No_pos_interact/test.mp4"
 final_video_path = None
 
 if video_source:
@@ -198,22 +199,40 @@ st.sidebar.subheader("📠 Giả lập POS (POS Simulator)")
 st.sidebar.info("Click để bắn tín hiệu log giả lập:")
 
 col_pos1, col_pos2 = st.sidebar.columns(2)
-fraud_alert = None
+
+# Hàm hỗ trợ xử lý sau khi bấm nút (để code gọn hơn)
+def handle_pos_click(action_type, amount):
+    # 1. Gửi tín hiệu vào logic xử lý
+    response_msg = st.session_state.monitor.add_pos_log(action_type, amount)
+    
+    # 2. Nếu có phản hồi, xử lý hiển thị
+    if response_msg:
+        timestamp = time.strftime('%H:%M:%S')
+        
+        # A. Xác định icon và loại thông báo
+        if "🚨" in response_msg:
+            icon = "🚨"
+            log_entry = f"🚨 [{timestamp}] {response_msg}"
+        elif "✅" in response_msg:
+            icon = "✅"
+            log_entry = f"✅ [{timestamp}] {response_msg}"
+        else:
+            icon = "ℹ️"
+            log_entry = f"ℹ️ [{timestamp}] {response_msg}"
+            
+        # B. Đẩy vào Nhật ký (Để nó hiện ở bảng bên phải màn hình chính)
+        st.session_state.activity_logs.append(log_entry)
+        
+        # C. Chỉ hiện Toast (Thông báo bay) - KHÔNG hiện khung to đùng ở Sidebar nữa
+        st.toast(response_msg, icon=icon)
 
 with col_pos1:
     if st.button("💰 PAYMENT"):
-        fraud_alert = st.session_state.monitor.add_pos_log("PAY", 50000)
-        st.toast("POS: Đã thanh toán 50k", icon="✅")
+        handle_pos_click("PAY", 50000)
 
 with col_pos2:
-    # ĐÂY LÀ NÚT QUAN TRỌNG ĐỂ TEST LOGIC
     if st.button("❌ VOID BILL"):
-        fraud_alert = st.session_state.monitor.add_pos_log("VOID", 0)
-        st.toast("POS: Đã hủy đơn!", icon="🗑️")
-
-# Hiển thị cảnh báo nếu Monitor phát hiện
-if fraud_alert:
-    st.error(fraud_alert)
+        handle_pos_click("VOID", 0)
     
 st.sidebar.divider()
 
@@ -324,7 +343,6 @@ elif final_video_path and not setup_mode:
         st_log = st.empty()
         st_state_info = st.empty()
     
-    logs = []
     start_btn = st.button("▶️ Bắt đầu / Reset")
     stop_btn = st.button("⏹️ Dừng")
 
@@ -359,18 +377,18 @@ elif final_video_path and not setup_mode:
             event = data['event']
             if event:
                 timestamp = time.strftime('%H:%M:%S')
-                icon = "🚨" if "ALARM" in event else "ℹ️"
-                logs.append(f"{icon} [{timestamp}] {event}")
-                st_log.markdown("  \n".join(logs[::-1]))
+                icon = "🚨" if "ALARM" in event or "GIAN LẬN" in event else "ℹ️"
+                log_entry = f"{icon} [{timestamp}] {event}"
             
-            if st.session_state.monitor.alert_log:
-                st.markdown(f"""
-                <div style="background-color: #ffcccc; padding: 10px; border-radius: 5px; border: 1px solid red; color: red; font-weight: bold;">
-                    {st.session_state.monitor.alert_log}
-                </div>
-                """, unsafe_allow_html=True)
-                # Reset sau khi hiện để không bị dính mãi
-                st.session_state.monitor.alert_log = None
+                # Tránh log trùng lặp liên tiếp (spam)
+                if not st.session_state.activity_logs or st.session_state.activity_logs[-1] != log_entry:
+                    st.session_state.activity_logs.append(log_entry)
+                    
+                    # Giới hạn chỉ lưu 20 dòng cuối cho nhẹ
+                    if len(st.session_state.activity_logs) > 20:
+                        st.session_state.activity_logs.pop(0)
+            
+            st_log.markdown("  \n".join(st.session_state.activity_logs[::-1]))         
                 
             if data['toast']:
                 msg, icon_toast = data['toast']
