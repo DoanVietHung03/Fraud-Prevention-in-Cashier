@@ -10,6 +10,7 @@ from datetime import datetime
 from streamlit_image_coordinates import streamlit_image_coordinates
 
 from modules.detect_hand import FraudDetector
+from modules.transaction_monitor import TransactionMonitor
 
 # --- 1. SETUP & UTILS ---
 class EvidenceRecorder:
@@ -61,11 +62,12 @@ class EvidenceRecorder:
         self.temp_evidence = []
 
 class VideoProcessorThread(threading.Thread):
-    def __init__(self, video_path, detector, output_queue):
+    def __init__(self, video_path, detector, output_queue, transaction_monitor):
         threading.Thread.__init__(self)
         self.video_path = video_path
         self.detector = detector
         self.output_queue = output_queue
+        self.monitor = transaction_monitor
         self.stopped = False
         self.fps = 30
         self.recorder = None
@@ -88,6 +90,32 @@ class VideoProcessorThread(threading.Thread):
 
             detection_result, event, drawer_status = self.detector.process_frame(frame_rgb, frame_timestamp_ms)
             
+            # --- 1. GỬI SỰ KIỆN VISION SANG MONITOR ---
+            # Lưu ý: Chỉ gửi 1 lần khi trạng thái chuyển sang DRAWER_OPENED
+            if drawer_status == "OPEN" and self.detector.state == "DRAWER_OPENED":
+                # Cần cơ chế để không spam event liên tục mỗi frame.
+                # Detector của bạn ở file detect_hand.py đã có logic lọc trùng (filtered_event)
+                # Nên ta có thể dựa vào event trả về:
+                if event and "Drawer Opened" in event: 
+                    self.monitor.add_physical_event("DRAWER_OPENED")
+                    
+            # --- 2. KIỂM TRA TIMEOUT ---
+            # Gọi hàm check_timeouts mỗi frame để xem có ai mở két quá lâu không
+            timeout_alert = self.monitor.check_timeouts()
+            
+            # Nếu có báo động từ Timeout, ghi đè lên toast hoặc event
+            if timeout_alert:
+                # Gửi ra UI
+                packet_alert = {
+                    "frame": frame_rgb, 
+                    "event": timeout_alert,  # Hiện text cảnh báo đỏ
+                    "drawer_status": drawer_status,
+                    "is_sleeping": False, 
+                    "toast": (timeout_alert, "👮")
+                }
+                self.output_queue.put(packet_alert)
+                continue # Skip frame này để ưu tiên báo động
+                     
             self.recorder.add_frame(frame_rgb)
             toast_msg = None
             if event:
@@ -143,10 +171,14 @@ defaults = {
 for key, val in defaults.items():
     if key not in st.session_state:
         st.session_state[key] = val
+        
+# --- INIT TRANSACTION MONITOR ---
+if 'monitor' not in st.session_state:
+    st.session_state.monitor = TransactionMonitor(match_window=10) # 10 giây để đối chiếu hệ thống bằng nhau
 
 # --- SIDEBAR: CẤU HÌNH ---
 video_source = st.file_uploader("Tải video giám sát", type=['mp4', 'mov', 'avi'])
-default_video_path = "./samples_demo/good_procedure/test.mp4"
+default_video_path = "./samples_demo/cancel_bill/test.mp4"
 final_video_path = None
 
 if video_source:
@@ -159,6 +191,30 @@ st.sidebar.header("1. Cấu hình AI")
 model_hand_path = st.sidebar.text_input("Model Tay", "./models/hand_landmarker.task")
 model_drawer_path = st.sidebar.text_input("Model Két", "./models/demo_sample/model_unquant.tflite")
 
+st.sidebar.divider()
+
+# --- THÊM PHẦN GIẢ LẬP POS Ở SIDEBAR ---
+st.sidebar.subheader("📠 Giả lập POS (POS Simulator)")
+st.sidebar.info("Click để bắn tín hiệu log giả lập:")
+
+col_pos1, col_pos2 = st.sidebar.columns(2)
+fraud_alert = None
+
+with col_pos1:
+    if st.button("💰 PAYMENT"):
+        fraud_alert = st.session_state.monitor.add_pos_log("PAY", 50000)
+        st.toast("POS: Đã thanh toán 50k", icon="✅")
+
+with col_pos2:
+    # ĐÂY LÀ NÚT QUAN TRỌNG ĐỂ TEST LOGIC
+    if st.button("❌ VOID BILL"):
+        fraud_alert = st.session_state.monitor.add_pos_log("VOID", 0)
+        st.toast("POS: Đã hủy đơn!", icon="🗑️")
+
+# Hiển thị cảnh báo nếu Monitor phát hiện
+if fraud_alert:
+    st.error(fraud_alert)
+    
 st.sidebar.divider()
 
 # --- SIDEBAR: CHỌN ĐIỂM ĐỂ CLICK ---
@@ -280,7 +336,7 @@ elif final_video_path and not setup_mode:
             st.session_state.thread.stop()
             st.session_state.thread.join()
         
-        st.session_state.thread = VideoProcessorThread(final_video_path, st.session_state.detector, st.session_state.frame_queue)
+        st.session_state.thread = VideoProcessorThread(final_video_path, st.session_state.detector, st.session_state.frame_queue, st.session_state.monitor)
         st.session_state.thread.start()
     
     if stop_btn:
@@ -307,6 +363,15 @@ elif final_video_path and not setup_mode:
                 logs.append(f"{icon} [{timestamp}] {event}")
                 st_log.markdown("  \n".join(logs[::-1]))
             
+            if st.session_state.monitor.alert_log:
+                st.markdown(f"""
+                <div style="background-color: #ffcccc; padding: 10px; border-radius: 5px; border: 1px solid red; color: red; font-weight: bold;">
+                    {st.session_state.monitor.alert_log}
+                </div>
+                """, unsafe_allow_html=True)
+                # Reset sau khi hiện để không bị dính mãi
+                st.session_state.monitor.alert_log = None
+                
             if data['toast']:
                 msg, icon_toast = data['toast']
                 st.toast(msg, icon=icon_toast)
