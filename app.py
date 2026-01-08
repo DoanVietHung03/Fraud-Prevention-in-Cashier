@@ -11,6 +11,7 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 
 from modules.detect_hand import FraudDetector
 from modules.transaction_monitor import TransactionMonitor
+from modules.utils import PerformanceLogger
 
 # --- 1. SETUP & UTILS ---
 class EvidenceRecorder:
@@ -71,6 +72,7 @@ class VideoProcessorThread(threading.Thread):
         self.stopped = False
         self.fps = 30
         self.recorder = None
+        self.logger = PerformanceLogger()
 
     def run(self):
         cap = cv2.VideoCapture(self.video_path, cv2.CAP_FFMPEG)
@@ -88,14 +90,11 @@ class VideoProcessorThread(threading.Thread):
             frame_timestamp_ms = int(1000 * frame_count / self.fps)
             frame_count += 1
 
-            detection_result, event, drawer_status = self.detector.process_frame(frame_rgb, frame_timestamp_ms)
+            detection_result, event, drawer_status = self.detector.process_frame(frame_rgb, frame_timestamp_ms, logger=self.logger)
             
             # --- 1. GỬI SỰ KIỆN VISION SANG MONITOR ---
             # Lưu ý: Chỉ gửi 1 lần khi trạng thái chuyển sang DRAWER_OPENED
             if drawer_status == "OPEN" and self.detector.state == "DRAWER_OPENED":
-                # Cần cơ chế để không spam event liên tục mỗi frame.
-                # Detector của bạn ở file detect_hand.py đã có logic lọc trùng (filtered_event)
-                # Nên ta có thể dựa vào event trả về:
                 if event and "Drawer Opened" in event: 
                     self.monitor.add_physical_event("DRAWER_OPENED")
                     
@@ -153,6 +152,7 @@ class VideoProcessorThread(threading.Thread):
             self.output_queue.put(packet)
             
         cap.release()
+        self.logger.save_to_file()
         self.stopped = True
 
     def stop(self):
@@ -179,7 +179,7 @@ if 'monitor' not in st.session_state:
 
 # --- SIDEBAR: CẤU HÌNH ---
 video_source = st.file_uploader("Tải video giám sát", type=['mp4', 'mov', 'avi'])
-default_video_path = "./samples_demo/No_pos_interact/test.mp4"
+default_video_path = "./samples_demo/cancel_bill/test.mp4"
 final_video_path = None
 
 if video_source:

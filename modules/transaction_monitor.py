@@ -2,6 +2,7 @@ import time
 import threading
 from collections import deque
 
+from .utils import PerformanceLogger
 class TransactionMonitor:
     def __init__(self, match_window=15):
         """
@@ -25,6 +26,8 @@ class TransactionMonitor:
         # --- THREAD SAFETY ---
         # Khóa để đảm bảo an toàn khi 2 luồng (Video & UI) cùng truy cập
         self.lock = threading.Lock()
+        
+        self.logger = PerformanceLogger()
 
     def add_physical_event(self, event_type):
         """
@@ -57,6 +60,7 @@ class TransactionMonitor:
                 # ==> TÌM THẤY KHỚP! (Nhân viên bấm Bill rồi két mới bung ra)
                 print(f"✅ MATCHED: Khớp với lệnh POS trước đó (Độ trễ: {current_time - self.recent_pos_logs[matched_pos_idx]['time']:.2f}s)")
                 
+                self.logger.log(0, f"✅ MATCHED: Khớp với lệnh POS trước đó (Độ trễ: {current_time - self.recent_pos_logs[matched_pos_idx]['time']:.2f}s)")
                 # Xóa log POS đã dùng để tránh dùng lại cho lần sau
                 self.recent_pos_logs.pop(matched_pos_idx)
                 
@@ -66,6 +70,7 @@ class TransactionMonitor:
             # --- LOGIC CŨ: KÉT TRƯỚC - POS SAU ---
             # Nếu không tìm thấy POS log nào chờ sẵn, thêm vào danh sách Pending
             self.pending_opens.append({'time': current_time, 'status': 'PENDING'})
+            self.logger.log(0, "⏳ Waiting for POS: Két đã mở, đang chờ tín hiệu POS...")
             print(f"⏳ Đang chờ tín hiệu từ POS...")
 
     def add_pos_log(self, action, amount=0):
@@ -75,6 +80,8 @@ class TransactionMonitor:
         Trả về chuỗi cảnh báo nếu phát hiện gian lận ngay lập tức.
         """
         current_time = time.time()
+        
+        self.logger.log(0, f"📠 POS INPUT: {action} - Số tiền: {amount}")
         
         with self.lock: # <--- Bắt đầu khóa an toàn
             print(f"📠 [POS] Nhận tín hiệu: {action} ({amount}đ)")
@@ -98,8 +105,10 @@ class TransactionMonitor:
                     # Xóa khỏi danh sách chờ để tránh check timeout lại
                     wait_time = int(current_time - self.pending_opens[matched_idx]['time'])
                     self.pending_opens.pop(matched_idx) 
+                    self.logger.log(0, f"🚨 GIAN LẬN: Hủy bill sau khi đã mở két! (Cách nhau {wait_time}s)")
                     return f"🚨 GIAN LẬN: Hủy bill sau khi đã mở két! (Cách nhau {wait_time}s)"
                 else:
+                    self.logger.log(0, "ℹ️ POS: Hủy đơn bình thường (Két chưa mở).")
                     return "ℹ️ POS: Hủy đơn bình thường (Két chưa mở)."
 
             # CASE B: THANH TOÁN (PAYMENT)
@@ -108,6 +117,7 @@ class TransactionMonitor:
                     # Tìm thấy két mở -> HỢP LỆ
                     self.pending_opens[matched_idx]['status'] = 'MATCHED_OK'
                     self.pending_opens.pop(matched_idx) # Xóa sự kiện đã xử lý xong
+                    self.logger.log(0, "✅ Giao dịch hợp lệ (Verified Transaction)")
                     return "✅ Giao dịch hợp lệ (Verified Transaction)"
                 else:
                     # Không thấy két mở trước đó. Có thể là:
@@ -142,6 +152,8 @@ class TransactionMonitor:
                     if elapsed > self.match_window:
                         event['status'] = 'THEFT_TIMEOUT'
                         alert_msg = f"🚨 BÁO ĐỘNG: Mở két {int(elapsed)}s mà KHÔNG nhập POS! (Nghi vấn trộm tiền)"
+                        
+                        self.logger.log(0, alert_msg)
                         
                         # Xóa sự kiện này khỏi danh sách pending
                         self.pending_opens.remove(event)

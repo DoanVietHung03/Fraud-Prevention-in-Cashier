@@ -1,0 +1,62 @@
+[
+    {
+        "timestamp": "21:45:06.731",
+        "process_time_ms": 33.74,
+        "event": "1️⃣ STEP 1: Staff Inputting Order (Verified)"
+    },
+    {
+        "timestamp": "21:45:13.975",
+        "process_time_ms": 26.32,
+        "event": "2️⃣ STEP 2: Drawer Opened (Valid)"
+    },
+    {
+        "timestamp": "21:45:13.976",
+        "process_time_ms": 0,
+        "event": "⏳ Waiting for POS: Két đã mở, đang chờ tín hiệu POS..."
+    },
+    {
+        "timestamp": "21:45:16.627",
+        "process_time_ms": 47.99,
+        "event": "✅ Transaction Ended (No money access detected)"
+    },
+    {
+        "timestamp": "21:45:28.990",
+        "process_time_ms": 0,
+        "event": "🚨 BÁO ĐỘNG: Mở két 15s mà KHÔNG nhập POS! (Nghi vấn trộm tiền)"
+    },
+    {
+        "timestamp": "21:45:31.761",
+        "process_time_ms": 41.25,
+        "event": "1️⃣ STEP 1: Staff Inputting Order (Verified)"
+    },
+    {
+        "timestamp": "21:45:38.742",
+        "process_time_ms": 49.96,
+        "event": "2️⃣ STEP 2: Drawer Opened (Valid)"
+    },
+    {
+        "timestamp": "21:45:38.743",
+        "process_time_ms": 0,
+        "event": "⏳ Waiting for POS: Két đã mở, đang chờ tín hiệu POS..."
+    },
+    {
+        "timestamp": "21:45:38.815",
+        "process_time_ms": 59.12,
+        "event": "3️⃣ STEP 3: Money Access / Change Given"
+    },
+    {
+        "timestamp": "21:45:39.643",
+        "process_time_ms": 0,
+        "event": "📠 POS INPUT: VOID - Số tiền: 0"
+    },
+    {
+        "timestamp": "21:45:39.647",
+        "process_time_ms": 0,
+        "event": "🚨 GIAN LẬN: Hủy bill sau khi đã mở két! (Cách nhau 0s)"
+    },
+    {
+        "timestamp": "21:45:41.930",
+        "process_time_ms": 46.46,
+        "event": "✅ STEP 4: Cycle Complete - Drawer Closed"
+    }
+]

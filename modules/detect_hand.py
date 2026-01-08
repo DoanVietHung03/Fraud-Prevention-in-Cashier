@@ -92,6 +92,8 @@ class FraudDetector:
         
         # Lưu sự kiện cuối cùng để tránh lặp lại
         self.last_sent_event = None
+        self.last_event_time = 0 
+        self.EVENT_COOLDOWN = 3.0  # Chỉ báo lại sự kiện sau 3 giây
         
         # Flag theo dõi có bị che chắn trong chu kỳ hiện tại không
         self.was_blocked_during_cycle = False
@@ -118,14 +120,27 @@ class FraudDetector:
         
     def _filter_duplicate_event(self, raw_event):
         """
-        Chỉ trả về event nếu nó KHÁC với event vừa gửi trước đó.
-        Giúp log không bị spam cùng 1 nội dung.
+        Lọc trùng sự kiện có tính đến thời gian (Cooldown).
+        Ngăn chặn việc spam khi tín hiệu bị nhấp nháy (Alarm -> None -> Alarm).
         """
+        if raw_event is None:
+            return None
+
+        current_time = time.time()
+
+        # CASE 1: Event lặp lại (Ví dụ: Vẫn đang Alarm)
         if raw_event == self.last_sent_event:
-            return None  # Giống hệt cái trước -> Bỏ qua
-        
-        # Nếu khác -> Cập nhật lại và trả về
+            # Nếu chưa đủ 3 giây từ lần báo trước -> Chặn (Return None)
+            if (current_time - self.last_event_time) < self.EVENT_COOLDOWN:
+                return None
+            
+            # Nếu đã quá 3 giây -> Cho phép báo lại (nhắc nhở)
+            self.last_event_time = current_time
+            return raw_event
+
+        # CASE 2: Event mới (Ví dụ: Từ Warning chuyển sang Alarm)
         self.last_sent_event = raw_event
+        self.last_event_time = current_time
         return raw_event
         
     def is_inside_roi(self, x, y, roi):
@@ -414,8 +429,12 @@ class FraudDetector:
     
         return event
 
-    def process_frame(self, frame, timestamp_ms):
+    def process_frame(self, frame, timestamp_ms, logger=None):
+        # Bắt đầu đo tổng thời gian frame
+        start_time = time.perf_counter()
+        
         self.frame_count += 1
+        
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         
         # --- TẦNG 1: KIỂM TRA PHÁ HOẠI CAMERA (Priority Max) ---
@@ -464,7 +483,7 @@ class FraudDetector:
             self.last_drawer_status = drawer_status
         else:
             drawer_status = self.last_drawer_status
-
+        
         # 3.2 Check Hand (MediaPipe)
         # Convert MediaPipe Image
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
@@ -503,6 +522,7 @@ class FraudDetector:
         current_time_sec = time.time()
         if hand_in_drawer:
             self.last_hand_in_drawer_time = current_time_sec
+            
         
         # --- TẦNG 4: CHECK CHE KHUẤT KÉT (Occlusion) ---
         # Chỉ check khi Két Đóng + Không có tay (để tránh báo giả khi nhân viên đang thao tác)
@@ -543,5 +563,12 @@ class FraudDetector:
         # Ví dụ: Frame 1 ra "ALARM", Frame 2 ra "ALARM" -> Hàm này sẽ biến Frame 2 thành None.
         
         filtered_event = self._filter_duplicate_event(final_raw_event)
+        
+        end_time = time.perf_counter()
+        process_time_ms = (end_time - start_time) * 1000
+
+        # GHI LOG (Chỉ khi có logger và có event đã lọc)
+        if logger and filtered_event:
+            logger.log(process_time_ms, filtered_event)
 
         return detection_result, filtered_event, drawer_status
