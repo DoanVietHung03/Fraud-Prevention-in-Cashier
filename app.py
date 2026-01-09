@@ -15,7 +15,7 @@ from modules.utils import PerformanceLogger
 
 # --- 1. SETUP & UTILS ---
 class EvidenceRecorder:
-    def __init__(self, output_folder="evidence_clips", fps=30, buffer_seconds=30):
+    def __init__(self, output_folder="evidence_clips", fps=30, buffer_seconds=15):
         self.output_folder = output_folder
         self.fps = fps
         self.ring_buffer = deque(maxlen=int(fps * buffer_seconds))
@@ -32,7 +32,7 @@ class EvidenceRecorder:
             self.frames_to_record -= 1
             if self.frames_to_record <= 0: self.stop_and_save()
 
-    def trigger_save(self, event_type="ALARM", duration_future=30):
+    def trigger_save(self, event_type="ALARM", duration_future=15):
         if self.is_recording:
             if event_type == "ALARM" and self.event_type == "WARNING":
                 self.event_type = "ALARM"
@@ -77,7 +77,7 @@ class VideoProcessorThread(threading.Thread):
     def run(self):
         cap = cv2.VideoCapture(self.video_path, cv2.CAP_FFMPEG)
         self.fps = cap.get(cv2.CAP_PROP_FPS) if cap.get(cv2.CAP_PROP_FPS) > 0 else 30
-        self.recorder = EvidenceRecorder(fps=self.fps, buffer_seconds=30)
+        self.recorder = EvidenceRecorder(fps=self.fps, buffer_seconds=15)
         
         self.detector.reset()
         frame_count = 0
@@ -119,10 +119,10 @@ class VideoProcessorThread(threading.Thread):
             toast_msg = None
             if event:
                 if "ALARM" in event:
-                    if self.recorder.trigger_save(event_type="ALARM", duration_future=30):
+                    if self.recorder.trigger_save(event_type="ALARM", duration_future=15):
                         toast_msg = ("🚨 PHÁT HIỆN VI PHẠM!", "🔥")
                 elif "WARNING" in event:
-                    if self.recorder.trigger_save(event_type="WARNING", duration_future=30):
+                    if self.recorder.trigger_save(event_type="WARNING", duration_future=15):
                         toast_msg = ("⚠️ Cảnh báo quy trình!", "📹")
 
             # Visualize
@@ -139,7 +139,7 @@ class VideoProcessorThread(threading.Thread):
                           (self.detector.drawer_roi[2], self.detector.drawer_roi[3]), box_color, 2)
             
             state_color = (255, 0, 0) if self.detector.state == "SUSPICIOUS" else (0, 255, 0)
-            cv2.putText(frame_rgb, f"STATE: {self.detector.state}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, state_color, 2)
+            cv2.putText(frame_rgb, f"STATE: {self.detector.state}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, state_color, 1)
 
             if self.output_queue.full():
                 try: self.output_queue.get_nowait()
